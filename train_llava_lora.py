@@ -124,6 +124,8 @@ num_epochs = 5
 # Prepare optimizer (only trainable parameters)
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
 
+vocab_size = model.llava_model.config.text_config.vocab_size
+
 # Training loop (simplified)
 for epoch in range(num_epochs):
     for images, queries, responses in dataloader:
@@ -139,19 +141,31 @@ for epoch in range(num_epochs):
         labels = []
         for i in range(len(responses)):
             labels.append(
-                processor(
-                    text=responses, images=None,
-                    return_tensors="pt",
-                    padding=True,
-                )["input_ids"][1:]
+                processor(text=[responses[i]], images=None, return_tensors="pt", padding=True,)["input_ids"][0][1:]
             )
         
-        outputs = model(**inputs, num_generate=max([len(response.split()) for response in responses])+1)
+        max_len = max([label.shape[-1] for label in labels])
+        outputs = model(**inputs, num_generate=max_len+1)
         
-        # breakpoint()
-        # loss = outputs.loss
+        # mask out padding tokens
+        mask = torch.ones_like(outputs)
+        for i, label in enumerate(labels):
+            mask[i, label.shape[-1]:, :] = 0
+            
+        outputs = outputs * mask
         
-        # # Backward pass and optimization
-        # loss.backward()
-        # optimizer.step()
-        # optimizer.zero_grad()
+        
+        # stack labels by padding at the beginning of the sequence
+        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True, padding_value=processor.tokenizer.pad_token_id, padding_side="left")
+        # convert to 1 - hot encoding for loss calculation
+        labels = nn.functional.one_hot(labels, num_classes=vocab_size).float().to("cuda")
+        
+        # Calculate loss ignoring padding tokens
+        loss = nn.functional.cross_entropy(outputs[:,:-1,:].view(-1, vocab_size), labels.view(-1, vocab_size))
+        
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        print(f"Loss: {loss.item()}")
