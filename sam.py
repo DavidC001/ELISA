@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
+from tqdm import tqdm
 
 import configuration as c
 
@@ -73,48 +74,65 @@ class SegmentationMaskExtractor:
     def __call__(self, path: os.PathLike | list[os.PathLike]):
         return self.extract(path)
 
-    def extract(self, path: os.PathLike | list[os.PathLike]):
+    def extract(self, path: str | list[str]):
         """
         Extracts segmentation masks from an image or a list of images.
-        :param image_path: Path to the image or list of paths.
-        :return: List of segmentation masks.
+            :param path: Path to the image, list of image paths, or a directory containing images. Nested directories are not supported.
+            :return: List of tuples where each tuple contains the path to an image and its corresponding segmentation masks.
         """
 
+        print(f"Extracting masks from {path}...")
+
         if isinstance(path, list):
-            res = [self.segment(img) for img in path]
+            res = [(img, self.segment(img)) for img in tqdm(path)]
         else:
             if os.path.isdir(path):
-                res = [self.segment(os.path.join(path, img)) for img in os.listdir(path)]
+                res = [
+                    (img, self.segment(os.path.join(path, img))) for img in tqdm(os.listdir(path))
+                ]
+
             else:
-                res = [self.segment(path)]
+                res = [(str(path), self.segment(path))]
+
+        print(f"Mask extraction from {path} complete.")
 
         return res
 
     def segment(self, image_path: os.PathLike) -> list[SegmentationMask]:
         """
         Extracts segmentation masks from an image.
-        :param image_path: Path to the image.
-        :return: List of segmentation masks.
+            :param image_path: Path to the image.
+            :return: List of segmentation masks.
         """
-        image = cv2.imread(image_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        image = cv2.resize(image, (self.config.resize, self.config.resize))
+        try:
+            image = cv2.imread(image_path)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = cv2.resize(image, (self.config.resize, self.config.resize))
 
-        masks = self.mask_generator.generate(image)
+            masks = self.mask_generator.generate(image)
 
-        masks.sort(key=(lambda x: x["area"]), reverse=True)
-        masks = masks[: self.config.n_masks]
+            masks.sort(key=(lambda x: x["area"]), reverse=True)
+            masks = masks[: self.config.n_masks]
 
-        print(f"Found {len(masks)} masks in {image_path}")
+            return masks
 
-        return masks
+        except Exception as e:
+            print(f"Error processing {image_path}: {e}")
+            return []
 
 
 if __name__ == "__main__":
-    config = c.load_yaml_config("config.yaml")
-    extractor = SegmentationMaskExtractor(config.sam)
-    images = glob.glob(config.dataset.image_dir + "/*.jpg")[:10]
+    conf = c.load_yaml_config("config.yaml")
+    extractor = SegmentationMaskExtractor(conf.sam)
+    images = glob.glob(conf.dataset.image_dir + "/*.jpg")
+    os.makedirs(conf.dataset.mask_dir, exist_ok=True)
 
-    masks = extractor(images)
+    all_masks = extractor.extract(images)
 
-    print(len(masks))
+    for img, img_masks in all_masks:
+        out_folder = img.replace(conf.dataset.image_dir, conf.dataset.mask_dir).removesuffix(".jpg")
+        os.makedirs(out_folder, exist_ok=True)
+
+        for i, mask in enumerate(img_masks):
+            out = os.path.join(out_folder, f"mask_{i}.png")
+            cv2.imwrite(out, mask["segmentation"].astype(np.uint8) * 255)
