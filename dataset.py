@@ -3,7 +3,7 @@ import os
 
 from torch.utils.data import Dataset
 
-from configuration import DatasetConfig
+from configuration import DatasetConfig, ProjectConfig
 
 
 class MultiMaskDataset(Dataset):
@@ -35,8 +35,11 @@ class MultiMaskDataset(Dataset):
         self.data_names = sorted([x for x in common_basenames])
 
     @classmethod
-    def from_config(cls, config: DatasetConfig):
+    def from_config(cls, config: DatasetConfig | ProjectConfig):
         """Loads the dataset from a configuration object."""
+        if isinstance(config, ProjectConfig):
+            config = config.dataset
+
         return cls(**config.__dict__)
 
     def __len__(self):
