@@ -3,11 +3,12 @@ import os
 
 import torch
 import torch.nn as nn
-from dotenv import dotenv_values
 from peft import LoraConfig, get_peft_model
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from transformers import LlavaForConditionalGeneration, LlavaProcessor
+
+from configuration import load_yaml_config
 
 
 # Define the custom model class
@@ -76,17 +77,15 @@ class CustomModel(nn.Module):
         output_embedding_layer.weight = embedding_layer.weight
 
 
-config = dotenv_values(".env")
+config = load_yaml_config("config.yaml")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model_name = config.get("MODEL_NAME")
-
 # Initialize the processor
-processor = LlavaProcessor.from_pretrained(model_name)
+processor = LlavaProcessor.from_pretrained(config.llava.model)
 
 # Load the pre-trained LLava model and wrap it with the custom model
-model = LlavaForConditionalGeneration.from_pretrained(model_name)
+model = LlavaForConditionalGeneration.from_pretrained(config.llava.model)
 
 # Apply LoRA to the LLava model
 lora_config = LoraConfig(
@@ -165,8 +164,8 @@ def collate_fn(batch):
     return images, queries, responses
 
 
-json_path = os.path.expanduser(config.get("JSON_PATH"))
-image_dir = os.path.expanduser(config.get("IMAGE_DIR"))
+json_path = os.path.expanduser(config.dataset.json_path)
+image_dir = os.path.expanduser(config.dataset.image_dir)
 
 # Example usage of the dataset and dataloader
 dataset = CustomDataset(json_path=json_path, image_dir=image_dir, processor=processor)

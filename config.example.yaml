@@ -1,0 +1,12 @@
+llava:
+  model: "Intel/llava-gemma-2b"
+
+dataset:
+  json_path: "C:/Users/david/Documents/progetto/LISA/ReasonSeg/explanatory/train.json"
+  image_dir: "C:/Users/david/Documents/progetto/LISA/ReasonSeg/train/"
+
+sam:
+  model: "vit_b"
+  checkpoint_dir: "C:/Users/david/Documents/progetto/LISA/models/SAM"
+  resize: 1024
+  n_masks: 20
