@@ -1,12 +1,18 @@
 import os
-from dataclasses import dataclass, is_dataclass
+from dataclasses import dataclass as og_dataclass
+from dataclasses import is_dataclass
 
 import yaml
 
 
-def my_dataclass(*args, **kwargs):
+def dataclass(*args, **kwargs):
+    """
+    Creates a dataclass that can handle nested dataclasses
+    and automatically convert dictionaries to dataclasses.
+    """
+
     def wrapper(cls):
-        cls = dataclass(cls, **kwargs)
+        cls = og_dataclass(cls, **kwargs)
         original_init = cls.__init__
 
         def __init__(self, *args, **kwargs):
@@ -23,12 +29,12 @@ def my_dataclass(*args, **kwargs):
     return wrapper(args[0]) if args else wrapper
 
 
-@my_dataclass
+@dataclass
 class LLavaConfig:
     model: str
 
 
-@my_dataclass
+@dataclass
 class DatasetConfig:
     json_path: str
     image_dir: str
@@ -38,7 +44,7 @@ class DatasetConfig:
         self.image_dir = os.path.expanduser(self.image_dir)
 
 
-@my_dataclass
+@dataclass
 class SAMConfig:
     model: str
     checkpoint_dir: str
@@ -49,7 +55,7 @@ class SAMConfig:
         self.checkpoint_dir = os.path.expanduser(self.checkpoint_dir)
 
 
-@my_dataclass
+@dataclass
 class ProjectConfig:
     llava: LLavaConfig
     dataset: DatasetConfig

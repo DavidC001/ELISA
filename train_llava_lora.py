@@ -6,14 +6,14 @@ import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
-from transformers import LlavaForConditionalGeneration, LlavaProcessor
+from transformers import LlavaForConditionalGeneration, LlavaProcessor, PreTrainedModel
 
 from configuration import load_yaml_config
 
 
 # Define the custom model class
 class CustomModel(nn.Module):
-    def __init__(self, model):
+    def __init__(self, model: PreTrainedModel):
         super().__init__()
         self.llava_model = model
         self.original_vocab_size = model.config.text_config.vocab_size
@@ -164,8 +164,8 @@ def collate_fn(batch):
     return images, queries, responses
 
 
-json_path = os.path.expanduser(config.dataset.json_path)
-image_dir = os.path.expanduser(config.dataset.image_dir)
+json_path = config.dataset.json_path
+image_dir = config.dataset.image_dir
 
 # Example usage of the dataset and dataloader
 dataset = CustomDataset(json_path=json_path, image_dir=image_dir, processor=processor)
