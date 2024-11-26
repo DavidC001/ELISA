@@ -13,11 +13,12 @@ from configuration import load_yaml_config
 
 # Define the custom model class
 class CustomModel(nn.Module):
-    def __init__(self, model: PreTrainedModel):
+    def __init__(self, model: PreTrainedModel, processor):
         super().__init__()
         self.llava_model = model
         self.original_vocab_size = model.config.text_config.vocab_size
         self.original_emb_matrix = model.get_input_embeddings().weight.clone().detach()
+        self.tokenizer_vocab_size = processor.tokenizer.vocab_size
 
     def forward(self, input_ids, num_generate=20, **kwargs):
         # Prepare inputs for generation
@@ -29,29 +30,30 @@ class CustomModel(nn.Module):
         outputs = self.llava_model(
             **inputs,
             return_dict=True,
-            output_hidden_states=True,
         )
         logits = outputs.logits
-        hidden_states = outputs.hidden_states[0]
+        
         # Generate next tokens
         next_tokens = torch.argmax(logits, dim=-1)
         input_ids = torch.cat([input_ids, next_tokens], dim=-1)
         generated = processor.tokenizer.decode(next_tokens[0])
+        print(f"Tokens: {next_tokens[0]}")
         print(f"Generated: {generated}")
 
         return logits
 
     def add_tokens(self, new_tokens):
-        print(f"Adding {new_tokens.size(0)} new tokens to the vocabulary")
+        print(f"Adding {new_tokens.size(0)} new tokens to the vocabulary of size {self.original_vocab_size}")
         # Get the current embedding layer
         embedding_layer = self.llava_model.get_input_embeddings()
+        emb_weights = embedding_layer.weight.clone().detach()
         # Get the current number of tokens and embedding dimension
         old_num_tokens, embedding_dim = embedding_layer.weight.size()
         num_new_tokens = new_tokens.size(0)
 
         # Create a new embedding matrix with the new size
         new_embedding_weights = torch.cat(
-            [embedding_layer.weight.clone().detach(), new_tokens], dim=0
+            [emb_weights[:self.tokenizer_vocab_size+1], new_tokens, emb_weights[self.tokenizer_vocab_size+1:]]
         )
 
         # Resize token embeddings
@@ -64,6 +66,7 @@ class CustomModel(nn.Module):
         # Update the LM head to have the same weights as the embeddings
         output_embedding_layer = self.llava_model.get_output_embeddings()
         output_embedding_layer.weight = new_embedding_layer.weight
+        
 
     def reset_tokens(self):
         print("Resetting the token embeddings")
@@ -71,7 +74,7 @@ class CustomModel(nn.Module):
         self.llava_model.resize_token_embeddings(self.original_vocab_size)
         # Assign the original embedding matrix to the embedding layer
         embedding_layer = self.llava_model.get_input_embeddings()
-        embedding_layer.weight = nn.Parameter(self.original_emb_matrix)
+        embedding_layer.weight = nn.Parameter(self.original_emb_matrix.to(embedding_layer.weight.device))
         # Update the LM head to have the same weights as the embeddings
         output_embedding_layer = self.llava_model.get_output_embeddings()
         output_embedding_layer.weight = embedding_layer.weight
@@ -83,6 +86,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Initialize the processor
 processor = LlavaProcessor.from_pretrained(config.llava.model)
+
+new_tokens = [f"<new_token_{i}>" for i in range(1, 10)]
+processor.tokenizer.add_tokens(new_tokens)
 
 # Load the pre-trained LLava model and wrap it with the custom model
 model = LlavaForConditionalGeneration.from_pretrained(config.llava.model)
@@ -98,7 +104,7 @@ lora_config = LoraConfig(
 )
 model = get_peft_model(model, lora_config)
 
-model = CustomModel(model).to(device)
+model = CustomModel(model, processor).to(device)
 
 # Freeze LLava model parameters except for LoRA parameters
 for name, param in model.named_parameters():
@@ -207,7 +213,7 @@ for epoch in range(num_epochs):
         new_tokens_1.requires_grad = True
         new_tokens_2 = torch.zeros((3, emb_size)).to(device)
         new_tokens_2.requires_grad = True
-        new_tokens = new_tokens_1 + 2 * new_tokens_2
+        new_tokens = new_tokens_1 + new_tokens_2
 
         model.add_tokens(new_tokens)
 
@@ -243,17 +249,16 @@ for epoch in range(num_epochs):
 
         # copy gradients to new tokens
         new_tokens.backward(
-            model.llava_model.get_input_embeddings().weight.grad[-new_tokens.size(0) :]
+            model.llava_model.get_input_embeddings().weight.grad[model.tokenizer_vocab_size + 1 : model.tokenizer_vocab_size + new_tokens.size(0) + 1]
         )
 
         # check if new tokens have gradients
-        print(f"New tokens gradients: {new_tokens.grad}")
-        breakpoint()
+        print(f"New tokens gradients: {torch.sum(new_tokens_1.grad)}, {torch.sum(new_tokens_2.grad)}")
+        # breakpoint()
 
         optimizer.step()
 
         # Reset token embeddings
         model.reset_tokens()
-        processor.tokenizer.reset_tokenizer()
 
         print(f"Loss: {loss.item()}")
