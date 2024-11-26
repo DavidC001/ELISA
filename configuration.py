@@ -38,10 +38,12 @@ class LLavaConfig:
 class DatasetConfig:
     json_path: str
     image_dir: str
+    mask_dir: str
 
     def __post_init__(self):
         self.json_path = os.path.expanduser(self.json_path)
         self.image_dir = os.path.expanduser(self.image_dir)
+        self.mask_dir = os.path.expanduser(self.mask_dir)
 
 
 @dataclass

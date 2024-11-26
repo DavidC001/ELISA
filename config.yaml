@@ -4,6 +4,7 @@ llava:
 dataset:
   json_path: "~/datasets/ReasonSeg/explanatory/train.json"
   image_dir: "~/datasets/ReasonSeg/train"
+  mask_dir: "~/datasets/ReasonSeg/masks"
 
 sam:
   model: "vit_b"
