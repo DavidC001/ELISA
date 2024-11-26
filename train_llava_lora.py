@@ -6,7 +6,8 @@ import torch.nn as nn
 from peft import LoraConfig, get_peft_model
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
-from transformers import LlavaForConditionalGeneration, LlavaProcessor, PreTrainedModel
+from transformers import LlavaForConditionalGeneration, LlavaProcessor, PreTrainedModel, BitsAndBytesConfig
+import bitsandbytes as bnb
 
 from configuration import load_yaml_config
 
@@ -54,7 +55,7 @@ class CustomModel(nn.Module):
         # Create a new embedding matrix with the new size
         new_embedding_weights = torch.cat(
             [emb_weights[:self.tokenizer_vocab_size+1], new_tokens, emb_weights[self.tokenizer_vocab_size+1:]]
-        )
+        ).to(embedding_layer.weight.device).to(embedding_layer.weight.dtype)
 
         # Resize token embeddings
         self.llava_model.resize_token_embeddings(old_num_tokens + num_new_tokens)
@@ -90,8 +91,19 @@ processor = LlavaProcessor.from_pretrained(config.llava.model)
 new_tokens = [f"<new_token_{i}>" for i in range(1, 10)]
 processor.tokenizer.add_tokens(new_tokens)
 
+# Configuration for quantization
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,  # or load_in_8bit=True for 8-bit quantization
+    # bnb_8bit_use_double_quant=True,
+    # bnb_8bit_quant_type='nf4',  # Normal Float 4
+    # bnb_8bit_compute_dtype=torch.float16
+)
+
 # Load the pre-trained LLava model and wrap it with the custom model
-model = LlavaForConditionalGeneration.from_pretrained(config.llava.model)
+model = LlavaForConditionalGeneration.from_pretrained(
+    config.llava.model,
+    quantization_config=bnb_config
+)
 
 # Apply LoRA to the LLava model
 lora_config = LoraConfig(
@@ -180,7 +192,11 @@ dataloader = DataLoader(dataset, batch_size=1, collate_fn=collate_fn)
 num_epochs = 5
 
 # Prepare optimizer (only trainable parameters)
-optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
+# optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
+# Use 8-bit Adam optimizer
+optimizer = bnb.optim.AdamW8bit(
+    filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4
+)
 
 vocab_size_general = model.llava_model.config.text_config.vocab_size
 emb_size = model.llava_model.config.text_config.hidden_size
@@ -249,7 +265,7 @@ for epoch in range(num_epochs):
 
         # copy gradients to new tokens
         new_tokens.backward(
-            model.llava_model.get_input_embeddings().weight.grad[model.tokenizer_vocab_size + 1 : model.tokenizer_vocab_size + new_tokens.size(0) + 1]
+            model.llava_model.get_input_embeddings().weight.grad[model.tokenizer_vocab_size + 1 : model.tokenizer_vocab_size + new_tokens.size(0) + 1].to(new_tokens.dtype)
         )
 
         # check if new tokens have gradients
