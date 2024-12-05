@@ -38,7 +38,7 @@ class CustomModel(nn.Module):
         next_tokens = torch.argmax(logits, dim=-1)
         input_ids = torch.cat([input_ids, next_tokens], dim=-1)
         generated = processor.tokenizer.decode(next_tokens[0])
-        print(f"Tokens: {next_tokens[0]}")
+        # print(f"Tokens: {next_tokens[0]}")
         print(f"Generated: {generated}")
 
         return logits
@@ -215,19 +215,22 @@ for epoch in range(num_epochs):
         # Prepare labels
         labels = []
         for i in range(len(responses)):
-            labels.append(
-                processor(
-                    text=[responses[i]],
-                    images=None,
-                    return_tensors="pt",
-                    padding=True,
-                )["input_ids"][0][1:]
-            )
+            label = processor(
+                        text=[responses[i]],
+                        images=None,
+                        return_tensors="pt",
+                        padding=True,
+                    )["input_ids"][0][1:]
+            # add the new label between the -2 and -1 tokens
+            label = torch.cat([label[: -1], torch.tensor([processor.tokenizer.vocab_size + 1]), label[-1:]])
+            labels.append(label)
+            
+        num_new_tokens = 20
 
         max_len = max([label.shape[-1] for label in labels])
-        new_tokens_1 = torch.zeros((3, emb_size)).to(device)
+        new_tokens_1 = torch.zeros((num_new_tokens, emb_size)).to(device)
         new_tokens_1.requires_grad = True
-        new_tokens_2 = torch.zeros((3, emb_size)).to(device)
+        new_tokens_2 = torch.zeros((num_new_tokens, emb_size)).to(device)
         new_tokens_2.requires_grad = True
         new_tokens = new_tokens_1 + new_tokens_2
 
@@ -235,7 +238,7 @@ for epoch in range(num_epochs):
 
         outputs = model(**inputs, num_generate=max_len + 1)
 
-        vocab_size = vocab_size_general + 3
+        vocab_size = vocab_size_general + new_tokens.size(0)
 
         # mask out padding tokens
         mask = torch.ones_like(outputs)

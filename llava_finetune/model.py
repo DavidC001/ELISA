@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+from torch.utils.data import Dataset
+from torch.functional import F
 
 from transformers import (
     LlavaForConditionalGeneration,
@@ -27,7 +29,17 @@ class SegAdapter(nn.Module):
         """
         super().__init__()
 
-        self.linear = nn.Linear(input_segment_dim, llava_embedding_dim)
+        self.linear = nn.Linear(input_segment_dim, 4186)
+        self.linear2 = nn.Linear(input_segment_dim, llava_embedding_dim)
+        self.fc1 = nn.Linear(input_segment_dim, 4186)
+        
+        self.layernorm = nn.LayerNorm(4186)
+        
+        self.dropout = nn.Dropout(0.2)
+        
+        self.final_linear = nn.Linear(4186, llava_embedding_dim)
+        
+        self.final_norm = nn.LayerNorm(llava_embedding_dim)
 
     def forward(self, segment_embeddings: torch.Tensor):
         """
@@ -39,8 +51,12 @@ class SegAdapter(nn.Module):
         Returns:
             llava_input (torch.Tensor): Input tensor for the LLava model with shape (batch_size, seq_length, llava_embedding_dim)
         """
-        llava_input = self.linear(segment_embeddings)
-
+        llava_input = self.linear(segment_embeddings) + F.gelu(self.fc1(segment_embeddings))
+        llava_input = self.layernorm(llava_input)
+        llava_input = self.dropout(llava_input)
+        llava_input = self.final_linear(llava_input) + F.gelu(self.linear2(segment_embeddings))
+        llava_input = self.final_norm(llava_input)
+        
         return llava_input
 
 
@@ -69,6 +85,7 @@ class DynamicVocabLlavaModel(nn.Module):
         additional_tokens: torch.Tensor,
         num_generate: int = 1,
         reset_tokens: bool = False,
+        token_masks: torch.Tensor = None,
         **kwargs,
     ):
         """
@@ -98,6 +115,10 @@ class DynamicVocabLlavaModel(nn.Module):
             return_dict=True,
         )
         logits = outputs.logits
+        
+        if token_masks is not None:
+            # Apply the token masks to the logits
+            logits = logits * token_masks
 
         # Generate next tokens
         next_tokens = torch.argmax(logits, dim=-1)
@@ -185,7 +206,7 @@ class LISA_Model(nn.Module):
 
         # Initialize the processor
         processor = LlavaProcessor.from_pretrained(model_name)
-        new_tokens = [f"<SEG_MASK_{i}>" for i in range(1, 500)]
+        new_tokens = [f"<SEG_MASK_{i}>" for i in range(1, 1000)]
         processor.tokenizer.add_tokens(new_tokens)
 
         # Configuration for quantization
@@ -199,6 +220,8 @@ class LISA_Model(nn.Module):
         model = LlavaForConditionalGeneration.from_pretrained(
             model_name, quantization_config=bnb_config
         )
+        for param in model.parameters():
+            param.requires_grad = False
 
         # Apply LoRA to the LLava model
         lora_config = LoraConfig(
@@ -213,7 +236,8 @@ class LISA_Model(nn.Module):
             task_type="CAUSAL_LM",
         )
         model = get_peft_model(model, lora_config)
-        self.adapter = SegAdapter(seg_emb_size, model.config.input_segment_dim())
+        
+        self.adapter = SegAdapter(seg_emb_size, model.get_input_embeddings().weight.size(1))
 
         self.llava_model = DynamicVocabLlavaModel(model, processor)
         
@@ -221,7 +245,7 @@ class LISA_Model(nn.Module):
         
         self.device = device
 
-    def forward(
+    def optim_step(
         self,
         texts: list[str],
         images: list[Image.Image],
@@ -231,7 +255,7 @@ class LISA_Model(nn.Module):
         optimizer: torch.optim.Optimizer,
     ):
         """
-        Forward pass through the model
+        Forward pass + optimization step through the model
 
         Args:
             texts (list[str]): List of input text sequences I only the text
@@ -247,13 +271,20 @@ class LISA_Model(nn.Module):
         input_texts = []
         free_token = 1
         new_tokens = []
+        
+        num_new_tokens = sum([pos_mask_embeds[i].size(0) for i in range(len(pos_mask_embeds))] + [neg_mask_embeds[i].size(0) for i in range(len(neg_mask_embeds))])
 
+        token_masks = torch.zeros(len(texts), self.llava_model.original_vocab_size+num_new_tokens).to(self.device)
+        token_masks[:, :self.llava_model.tokenizer_vocab_size+1] = 1
+        token_masks[:, self.llava_model.tokenizer_vocab_size+1+num_new_tokens:] = 1
+        
         # Pass all tokens to the adapter and add the corresponding token lemma to the labels texts
         for i in range(len(pos_mask_embeds)):
-            transformed = self.adapter(pos_mask_embeds[i])
+            transformed = self.adapter(pos_mask_embeds[i].to(self.device))
             for j in range(transformed.size(0)):
                 new_tokens.append(transformed[j])
                 labels[i] += f" <SEG_MASK_{free_token}>"
+                token_masks[i, self.llava_model.tokenizer_vocab_size + free_token] = 1
                 free_token += 1
             
             # apply the chat template to the texts
@@ -268,22 +299,43 @@ class LISA_Model(nn.Module):
                 )
             )
             # get the last token of the text as the end token to be added to the labels
-            labels[i] += f" {self.end_token}"
+            labels[i] += f"{self.end_token}"
+
+        print()
+        print("MODEL INPUTS")
+        print(f"\tInput texts: {input_texts}")
+        print(f"\tLabels: {labels}")
+        print()
 
         for i in range(len(neg_mask_embeds)):
-            transformed = self.adapter(neg_mask_embeds[i])
+            transformed = self.adapter(neg_mask_embeds[i].to(self.device))
             for j in range(transformed.size(0)):
                 new_tokens.append(transformed[j])
+                token_masks[i, self.llava_model.tokenizer_vocab_size + free_token] = 1
+                free_token += 1
                 
         new_tokens = torch.stack(new_tokens)
 
         # tokenize the texts
-        inputs = self.llava_model.processor(input_texts, images, return_tensors="pt", padding=True).to(self.device)
+        inputs = self.llava_model.processor(text=input_texts, images=images, return_tensors="pt", padding=True).to(self.device)
+        # remove last two token from the input text (the <end_of_turn> token <eos> token)
+        inputs["input_ids"] = inputs["input_ids"][:, :-2]
+        
         labels = self.llava_model.processor(
-            labels, [], return_tensors="pt", padding=True, truncation=True
+            text=labels, return_tensors="pt", padding=True, truncation=True
         )
-        labels_input_ids = labels["input_ids"]
-        labels_mask = labels["attention_mask"]
+        labels_input_ids = labels["input_ids"].to(self.device)
+        # remove the last token from the labels (the <eos> token) and the first token (the <bos> token)
+        labels_input_ids = labels_input_ids[:, :-1]
+        # remove all the bos tokens from the labels and make them padded
+        labels_input_ids[labels_input_ids == self.llava_model.processor.tokenizer.bos_token_id] = self.llava_model.processor.tokenizer.pad_token_id
+        
+        
+        # print()
+        # print("MODEL TOKENS INPUT")
+        # print(f"\tInput tokens: {inputs['input_ids']}")
+        # print(f"\tLabels: {labels_input_ids}")
+        # print()
         
         # Forward pass through the model
         logits = self.llava_model(
@@ -291,18 +343,16 @@ class LISA_Model(nn.Module):
             additional_tokens=new_tokens,
             num_generate=labels_input_ids.size(1),
             reset_tokens=False,
+            token_masks=token_masks.unsqueeze(1),
         )
         
         logits = logits.view(-1, logits.size(-1))
-        labels_mask = labels_mask.view(-1).unsqueeze(-1).to(logits.device)
-        logits = logits * labels_mask
         
-        labels_input_ids = labels_input_ids.view(-1)
-        # one-hot encode the labels
-        labels = torch.nn.functional.one_hot(labels_input_ids, num_classes=logits.size(-1)).float().to(logits.device)
+        labels_input_ids = labels_input_ids.reshape(-1)
         
         # Compute the cross-entropy loss between the logits and the labels
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels, reduction="none")
+        loss_fn = nn.CrossEntropyLoss(ignore_index= self.llava_model.processor.tokenizer.pad_token_id)
+        loss = loss_fn(logits, labels_input_ids)
         
         # backward pass
         optimizer.zero_grad()
@@ -310,7 +360,7 @@ class LISA_Model(nn.Module):
         loss.backward()
         
         # copy the gradients to the mask embeddings
-        emb_grads = self.llava_model.get_input_embeddings().weight.gradself.llava_model.get_input_embeddings().weight.grad
+        emb_grads = self.llava_model.llava_model.get_input_embeddings().weight.grad
         new_tokens.backward(emb_grads[self.llava_model.tokenizer_vocab_size + 1 : self.llava_model.tokenizer_vocab_size + 1 + new_tokens.size(0)])
         
         optimizer.step()
@@ -318,3 +368,12 @@ class LISA_Model(nn.Module):
         self.llava_model.reset_tokens()
         
         return logits, loss
+    
+    def generate(self):
+        raise NotImplementedError
+        
+    def forward(self, **kwargs):
+        if self.training:
+            return self.optim_step(**kwargs)
+        else:
+            return self.generate(**kwargs)
