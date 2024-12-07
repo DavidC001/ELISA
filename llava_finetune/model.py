@@ -9,7 +9,7 @@ from transformers import (
     PreTrainedModel,
     BitsAndBytesConfig,
     StoppingCriteriaList,
-    EosTokenCriteria
+    EosTokenCriteria,
 )
 from peft import LoraConfig, get_peft_model
 
@@ -17,13 +17,23 @@ from PIL import Image
 
 DEBUG_PRINTS = False
 
+
 class SegAdapter(nn.Module):
     """
     Adapter module from the output of AlphaClip from the segmentation model to the input of the LLava model
     """
 
-    def __init__(self, input_segment_dim: int, llava_embedding_dim: int,
-                 num_linears: int=25, hidden_dim: int=None, expand_factor: int=2, dropout: float=0.25, num_heads: int=1, num_queries: int=10):
+    def __init__(
+        self,
+        input_segment_dim: int,
+        llava_embedding_dim: int,
+        num_linears: int = 25,
+        hidden_dim: int = None,
+        expand_factor: int = 2,
+        dropout: float = 0.25,
+        num_heads: int = 1,
+        num_queries: int = 10,
+    ):
         """
         Adapter module from the output of AlphaClip from the segmentation model to the input of the LLava model
 
@@ -38,31 +48,35 @@ class SegAdapter(nn.Module):
             num_queries (int): Number of queries to use in the multi-head attention layer
         """
         super().__init__()
-        
+
         hidden_dim = hidden_dim if hidden_dim is not None else llava_embedding_dim
-        self.linears = nn.ModuleList([nn.Linear(input_segment_dim, hidden_dim) for _ in range(num_linears)])
-        
+        self.linears = nn.ModuleList(
+            [nn.Linear(input_segment_dim, hidden_dim) for _ in range(num_linears)]
+        )
+
         # multi-head attention
-        self.attention = nn.MultiheadAttention(hidden_dim, num_heads=num_heads, batch_first=True, dropout=dropout)
-        
+        self.attention = nn.MultiheadAttention(
+            hidden_dim, num_heads=num_heads, batch_first=True, dropout=dropout
+        )
+
         query = torch.randn(1, num_queries, hidden_dim)
         self.query = nn.Parameter(query)
-        
+
         # FFN
         self.ffn = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim*expand_factor),
+            nn.Linear(hidden_dim, hidden_dim * expand_factor),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim*expand_factor, hidden_dim),
+            nn.Linear(hidden_dim * expand_factor, hidden_dim),
         )
-        
+
         self.linear = nn.Linear(hidden_dim, llava_embedding_dim)
         self.skip = nn.Linear(input_segment_dim, llava_embedding_dim)
-        
+
         self.norm = nn.LayerNorm(llava_embedding_dim)
         self.mean_emb = nn.Parameter(torch.zeros(llava_embedding_dim))
         self.std_emb = nn.Parameter(torch.ones(llava_embedding_dim))
-        
+
     def forward(self, segment_embeddings: torch.Tensor):
         """
         Forward pass through the adapter module
@@ -74,26 +88,29 @@ class SegAdapter(nn.Module):
             llava_input (torch.Tensor): Input tensor for the LLava model with shape (seq_length, llava_embedding_dim)
         """
         # Apply linear layers x shape (
-        x = [linear(segment_embeddings) for linear in self.linears] # list of shape (num_segments, hidden_dim)
+        x = [
+            linear(segment_embeddings) for linear in self.linears
+        ]  # list of shape (num_segments, hidden_dim)
         # shape (num_segments, num_linears, hidden_dim)
         x = torch.stack(x, dim=1)
-        
+
         # Apply multi-head attention
-        
+
         query = self.query.repeat(x.size(0), 1, 1)
         x, _ = self.attention(query=query, key=x, value=x)
         x = x.mean(dim=1)
-        
+
         # Apply FFN
         x = self.ffn(x)
-        
+
         # Apply linear layer
         llava_input = self.linear(x) + self.skip(segment_embeddings)
-        
+
         # normalize the output
         llava_input = self.norm(llava_input) * self.std_emb + self.mean_emb
-        
+
         return llava_input
+
 
 # Define the custom model class
 class DynamicVocabLlavaModel(nn.Module):
@@ -150,7 +167,7 @@ class DynamicVocabLlavaModel(nn.Module):
             return_dict=True,
         )
         logits = outputs.logits
-        
+
         if token_masks is not None:
             # Apply the token masks to the logits
             logits = logits * token_masks
@@ -228,24 +245,31 @@ class LISA_Model(nn.Module):
     """
 
     def __init__(
-        self, model_name: str, seg_emb_size: int, end_turn_token: str = "<end_of_turn>\n", 
-        q4: bool = True, q8: bool = False, 
+        self,
+        model_name: str,
+        seg_emb_size: int,
+        max_new_tokens: int = 100,
+        end_turn_token: str = "<end_of_turn>\n",
+        q4: bool = True,
+        q8: bool = False,
         device: str = "cuda",
-        **adapter_kwargs
+        **adapter_kwargs,
     ):
         """Initialize the LISA model
 
         Args:
             model_name (str): name of the llava model to load from huggingface
             seg_emb_size (int): size of the segment embeddings coming from the segmentation encoder model
+            max_new_tokens (int, optional): Maximum number of new tokens to generate. Defaults to 100.
             end_turn_token (str, optional): Token to be added at the end of the generated text. Defaults to "<end_of_turn>\n".
             q4 (bool, optional): Load the model in 4-bit quantization. Defaults to True.
             q8 (bool, optional): Load the model in 8-bit quantization. Defaults to False.
             device (str, optional): Device to run the model on. Defaults to "cuda"
-            
+
         """
         super(LISA_Model, self).__init__()
         self.seg_emb_size = seg_emb_size
+        self.max_new_tokens = max_new_tokens
 
         # Initialize the processor
         processor = LlavaProcessor.from_pretrained(model_name)
@@ -279,14 +303,18 @@ class LISA_Model(nn.Module):
             task_type="CAUSAL_LM",
         )
         model = get_peft_model(model, lora_config)
-        
-        self.adapter = SegAdapter(seg_emb_size, model.get_input_embeddings().weight.size(1), **adapter_kwargs)
+
+        self.adapter = SegAdapter(
+            seg_emb_size, model.get_input_embeddings().weight.size(1), **adapter_kwargs
+        )
 
         self.llava_model = DynamicVocabLlavaModel(model, processor)
-        
+
         self.end_token = end_turn_token
-        self.tokenized_end_token = processor.tokenizer.encode(end_turn_token, add_special_tokens=False)[0]
-        
+        self.tokenized_end_token = processor.tokenizer.encode(
+            end_turn_token, add_special_tokens=False
+        )[0]
+
         self.device = device
 
     def optim_step(
@@ -315,15 +343,20 @@ class LISA_Model(nn.Module):
         input_texts = []
         free_token = 1
         new_tokens = []
-        
-        num_new_tokens = sum([pos_mask_embeds[i].size(0) for i in range(len(pos_mask_embeds))] + [neg_mask_embeds[i].size(0) for i in range(len(neg_mask_embeds))])
 
-        token_masks = torch.zeros(len(texts), self.llava_model.original_vocab_size+num_new_tokens).to(self.device)
-        token_masks[:, :self.llava_model.tokenizer_vocab_size] = 1
-        token_masks[:, self.llava_model.tokenizer_vocab_size+num_new_tokens-1:] = 1
-        
+        num_new_tokens = sum(
+            [pos_mask_embeds[i].size(0) for i in range(len(pos_mask_embeds))]
+            + [neg_mask_embeds[i].size(0) for i in range(len(neg_mask_embeds))]
+        )
+
+        token_masks = torch.zeros(
+            len(texts), self.llava_model.original_vocab_size + num_new_tokens
+        ).to(self.device)
+        token_masks[:, : self.llava_model.tokenizer_vocab_size] = 1
+        token_masks[:, self.llava_model.tokenizer_vocab_size + num_new_tokens - 1 :] = 1
+
         answers = []
-        
+
         # Pass all tokens to the adapter and add the corresponding token lemma to the labels texts
         for i in range(len(pos_mask_embeds)):
             answers.append("")
@@ -331,9 +364,11 @@ class LISA_Model(nn.Module):
                 new_tokens.append(pos_mask_embeds[i][j])
                 labels[i] += f"<SEG_MASK_{free_token}>"
                 answers[i] += f"<SEG_MASK_{free_token}>"
-                token_masks[i, self.llava_model.tokenizer_vocab_size + free_token -1] = 1
+                token_masks[
+                    i, self.llava_model.tokenizer_vocab_size + free_token - 1
+                ] = 1
                 free_token += 1
-            
+
             # apply the chat template to the texts
             input_texts.append(
                 self.llava_model.processor.tokenizer.apply_chat_template(
@@ -359,28 +394,40 @@ class LISA_Model(nn.Module):
         for i in range(len(neg_mask_embeds)):
             for j in range(neg_mask_embeds[i].size(0)):
                 new_tokens.append(neg_mask_embeds[i][j])
-                token_masks[i, self.llava_model.tokenizer_vocab_size + free_token -1] = 1
+                token_masks[
+                    i, self.llava_model.tokenizer_vocab_size + free_token - 1
+                ] = 1
                 free_token += 1
-                
+
         new_tokens = torch.stack(new_tokens)
         new_tokens = self.adapter(new_tokens.to(self.device))
 
         # tokenize the texts
-        inputs = self.llava_model.processor(text=input_texts, images=images, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
+        inputs = self.llava_model.processor(
+            text=input_texts,
+            images=images,
+            return_tensors="pt",
+            padding=True,
+            add_special_tokens=False,
+        ).to(self.device)
         # remove last token from the input text
         inputs["input_ids"] = inputs["input_ids"][:, :-1]
-        
+
         labels_ids = self.llava_model.processor(
-            text=labels, return_tensors="pt", padding=True, truncation=True, add_special_tokens=False
+            text=labels,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            add_special_tokens=False,
         )
         labels_input_ids = labels_ids["input_ids"].to(self.device)
-        
+
         # print()
         # print("MODEL TOKENS INPUT")
         # print(f"\tInput tokens: {inputs['input_ids']}")
         # print(f"\tLabels: {labels_input_ids}")
         # print()
-        
+
         # Forward pass through the model
         logits = self.llava_model(
             input_ids=inputs["input_ids"],
@@ -389,39 +436,55 @@ class LISA_Model(nn.Module):
             reset_tokens=False,
             token_masks=token_masks.unsqueeze(1),
         )
-        
+
         logits = logits.view(-1, logits.size(-1))
-        
+
         labels_input_ids = labels_input_ids.reshape(-1)
-        
-        loss_fn = nn.CrossEntropyLoss(ignore_index= self.llava_model.processor.tokenizer.pad_token_id, reduction="none")
+
+        loss_fn = nn.CrossEntropyLoss(
+            ignore_index=self.llava_model.processor.tokenizer.pad_token_id,
+            reduction="none",
+        )
         # where the labels_input_ids are one of the new tokens, the loss should be multiplied by 2
         loss = loss_fn(logits, labels_input_ids)
-        
+
         weights = torch.ones_like(labels_input_ids) * 0.5
         weights[labels_input_ids > self.llava_model.tokenizer_vocab_size] = 3
         loss = (loss * weights).mean()
-        
+
         # if loss is nan break
         if torch.isnan(loss):
             breakpoint()
-        
+
         # backward pass
         optimizer.zero_grad()
-        
+
         loss.backward()
-        
+
         # copy the gradients to the mask embeddings
         emb_grads = self.llava_model.llava_model.get_input_embeddings().weight.grad
-        new_tokens.backward(emb_grads[self.llava_model.tokenizer_vocab_size + 1 : self.llava_model.tokenizer_vocab_size + 1 + new_tokens.size(0)])
-        
+        new_tokens.backward(
+            emb_grads[
+                self.llava_model.tokenizer_vocab_size
+                + 1 : self.llava_model.tokenizer_vocab_size
+                + 1
+                + new_tokens.size(0)
+            ]
+        )
+
         optimizer.step()
-        
+
         self.llava_model.reset_tokens()
-        
+
         return logits, loss
-    
-    def generate(self, texts: list[str], images: list[Image.Image], pos_mask_embeds: list[torch.Tensor], neg_mask_embeds: list[torch.Tensor]):
+
+    def generate(
+        self,
+        texts: list[str],
+        images: list[Image.Image],
+        pos_mask_embeds: list[torch.Tensor],
+        neg_mask_embeds: list[torch.Tensor],
+    ):
         """
         Generate text from the model
 
@@ -441,7 +504,7 @@ class LISA_Model(nn.Module):
             transformed_neg = self.adapter(neg_mask_embeds[i].to(self.device))
             new_tokens = torch.cat([transformed_pos, transformed_neg])
             self.llava_model.add_tokens(new_tokens)
-            
+
             # apply the chat template to the texts
             input_text = self.llava_model.processor.tokenizer.apply_chat_template(
                 [
@@ -450,25 +513,36 @@ class LISA_Model(nn.Module):
                 tokenize=False,
                 add_generation_prompt=True,
             )
-            
+
             # tokenize the texts
             inputs = self.llava_model.processor(
-                text=input_text, images=images[i], return_tensors="pt", padding=True, add_special_tokens=False
+                text=input_text,
+                images=images[i],
+                return_tensors="pt",
+                padding=True,
+                add_special_tokens=False,
             ).to(self.device)
 
             # call generate on the model
             generated_tok = self.llava_model.llava_model.generate(
-                **inputs, num_beams=1, max_new_tokens=500, eos_token_id=self.tokenized_end_token
+                **inputs,
+                num_beams=1,
+                max_new_tokens=self.max_new_tokens,
+                eos_token_id=self.tokenized_end_token,
             )
-            generated = self.llava_model.processor.batch_decode(generated_tok, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]
+            generated = self.llava_model.processor.batch_decode(
+                generated_tok,
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )[0]
             # get only from model\n afterwords
             generated = generated.split("model\n")[1]
             self.llava_model.reset_tokens()
-            
+
             outputs.append(generated)
             tokens.append(generated_tok[0])
         return outputs, tokens
-        
+
     def forward(self, **kwargs):
         if self.training:
             return self.optim_step(**kwargs)

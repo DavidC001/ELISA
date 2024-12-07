@@ -5,6 +5,7 @@ from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import wandb
 
+
 # ==========================
 # 1. Dataset Definition
 # ==========================
@@ -44,13 +45,23 @@ class CustomDataset(Dataset):
                 if (len(sample["gt_embs"]) == 0) or (len(sample["sam_embs"]) == 0):
                     continue
 
-                data.append({
-                    "image": Image.open(os.path.join(image_dir, image)) if self.load_images else image,
-                    "queries": image_queries,
-                    "answer": answers.get(image, None),
-                    "gt_embs": torch.tensor(sample["gt_embs"]).view(len(sample["gt_embs"]), -1),
-                    "sam_embs": torch.tensor(sample["sam_embs"]).view(len(sample["sam_embs"]), -1),
-                })
+                data.append(
+                    {
+                        "image": (
+                            Image.open(os.path.join(image_dir, image))
+                            if self.load_images
+                            else image
+                        ),
+                        "queries": image_queries,
+                        "answer": answers.get(image, None),
+                        "gt_embs": torch.tensor(sample["gt_embs"]).view(
+                            len(sample["gt_embs"]), -1
+                        ),
+                        "sam_embs": torch.tensor(sample["sam_embs"]).view(
+                            len(sample["sam_embs"]), -1
+                        ),
+                    }
+                )
         return data
 
     def __len__(self):
@@ -58,7 +69,11 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.data[idx]
-        image = sample["image"] if self.load_images else Image.open(os.path.join(self.image_dir, sample["image"]))
+        image = (
+            sample["image"]
+            if self.load_images
+            else Image.open(os.path.join(self.image_dir, sample["image"]))
+        )
         query = sample["queries"][torch.randint(0, len(sample["queries"]), (1,)).item()]
         return {
             "image": image,
@@ -68,13 +83,17 @@ class CustomDataset(Dataset):
             "sam_embs": sample["sam_embs"],
         }
 
+
 def collate_fn(batch):
     new_batch = {}
     for key in batch[0]:
         new_batch[key] = [sample[key] for sample in batch]
     return new_batch
 
-def get_dataloaders(explanatory_train, image_dir, batch_size, train_jsonl, val_jsonl, test_jsonl):
+
+def get_dataloaders(
+    explanatory_train, image_dir, batch_size, train_jsonl, val_jsonl, test_jsonl
+):
     """Get the training, validation, and test data loaders.
 
     Args:
@@ -94,28 +113,33 @@ def get_dataloaders(explanatory_train, image_dir, batch_size, train_jsonl, val_j
     data_train = CustomDataset(
         json_path=train_jsonl,
         image_dir=os.path.join(image_dir, "train"),
-        exp_json_path=explanatory_train
+        exp_json_path=explanatory_train,
     )
 
     print("Loading Validation Data")
     data_val = CustomDataset(
-        json_path=val_jsonl,
-        image_dir=os.path.join(image_dir, "val")
+        json_path=val_jsonl, image_dir=os.path.join(image_dir, "val")
     )
 
     print("Loading Test Data")
     data_test = CustomDataset(
-        json_path=test_jsonl,
-        image_dir=os.path.join(image_dir, "test")
+        json_path=test_jsonl, image_dir=os.path.join(image_dir, "test")
     )
 
     # Create DataLoaders
-    data_loader = DataLoader(data_train, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    data_val_loader = DataLoader(data_val, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-    data_test_loader = DataLoader(data_test, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-    
+    data_loader = DataLoader(
+        data_train, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
+    )
+    data_val_loader = DataLoader(
+        data_val, batch_size=batch_size, shuffle=False, collate_fn=collate_fn
+    )
+    data_test_loader = DataLoader(
+        data_test, batch_size=batch_size, shuffle=False, collate_fn=collate_fn
+    )
+
     return data_loader, data_val_loader, data_test_loader
-    
+
+
 # ==========================
 # 2. WandB Initialization
 # ==========================
@@ -129,6 +153,6 @@ def initialize_wandb(exp_name, exp_config):
     """
     wandb.init(
         project="LISA_ACV",
-        name=exp_name+"_"+wandb.util.generate_id(),
-        config=exp_config
+        name=exp_name + "_" + wandb.util.generate_id(),
+        config=exp_config,
     )

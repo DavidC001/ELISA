@@ -1,5 +1,6 @@
 import torch
 import warnings
+
 warnings.filterwarnings("ignore")
 from llava_finetune.utils import get_dataloaders
 from llava_finetune.functions import run_experiment
@@ -21,14 +22,15 @@ experiments_config = {
         "model_params": {
             # General Parameters
             "end_turn_token": "<end_of_turn>\n",
-            "q4": True, 
-            "q8": False, 
+            "max_new_tokens": 100,
+            "q4": True,
+            "q8": False,
             # Adapter Parameters
-            "num_linears": 25, 
-            "hidden_dim": None, 
-            "expand_factor": 2, 
-            "dropout": 0.25, 
-            "num_heads": 1, 
+            "num_linears": 25,
+            "hidden_dim": None,
+            "expand_factor": 2,
+            "dropout": 0.25,
+            "num_heads": 1,
             "num_queries": 10,
         },
         "log_interval": 10,  # How often to log to wandb
@@ -49,7 +51,7 @@ if __name__ == "__main__":
         5,
         "data/train-v2.jsonl",
         "data/val-v2.jsonl",
-        "data/test-v2.jsonl"
+        "data/test-v2.jsonl",
     )
     print("Datasets Loaded Successfully")
 
@@ -59,5 +61,5 @@ if __name__ == "__main__":
             exp_name=exp_name,
             exp_config=exp_config,
             config=config,
-            data_loaders=(data_loader, data_val_loader, data_test_loader)
+            data_loaders=(data_loader, data_val_loader, data_test_loader),
         )
