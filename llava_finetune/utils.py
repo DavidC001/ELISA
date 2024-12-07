@@ -9,8 +9,17 @@ import wandb
 # 1. Dataset Definition
 # ==========================
 class CustomDataset(Dataset):
-    def __init__(self, json_path, image_dir, exp_json_path=None):
+    def __init__(self, json_path, image_dir, exp_json_path=None, load_images=False):
+        """Initializes the CustomDataset class.
+
+        Args:
+            json_path (str): Path to the jsonl file containing the data.
+            image_dir (str): Path to the directory containing the images.
+            exp_json_path (str, optional): Path to the json file containing the explanatory data. Defaults to None.
+            load_images (bool, optional): Whether to pre-load the images. Defaults to False.
+        """
         self.image_dir = image_dir
+        self.load_images = load_images
         self.data = self.load_data(json_path, image_dir, exp_json_path)
 
     def load_data(self, json_path, image_dir, exp_json_path):
@@ -36,7 +45,7 @@ class CustomDataset(Dataset):
                     continue
 
                 data.append({
-                    "image": Image.open(os.path.join(image_dir, image)),
+                    "image": Image.open(os.path.join(image_dir, image)) if self.load_images else image,
                     "queries": image_queries,
                     "answer": answers.get(image, None),
                     "gt_embs": torch.tensor(sample["gt_embs"]).view(len(sample["gt_embs"]), -1),
@@ -49,7 +58,7 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.data[idx]
-        image = sample["image"]
+        image = sample["image"] if self.load_images else Image.open(os.path.join(self.image_dir, sample["image"]))
         query = sample["queries"][torch.randint(0, len(sample["queries"]), (1,)).item()]
         return {
             "image": image,
