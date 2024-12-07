@@ -17,7 +17,7 @@ experiments_config = {
         "epochs": 200,
         "optimizer": {
             "adapter_lr": 1e-3,
-            "lora_lr": 1e-6,
+            "lora_lr": 1e-8,
         },
         "model_params": {
             # General Parameters
@@ -26,12 +26,12 @@ experiments_config = {
             "q4": True,
             "q8": False,
             # Adapter Parameters
-            "num_linears": 25,
             "hidden_dim": None,
             "expand_factor": 2,
+            "num_linears": [25, 10],
+            "num_heads": [1, 1],
+            "num_queries": [10, 1],
             "dropout": 0.25,
-            "num_heads": 1,
-            "num_queries": 10,
         },
         "log_interval": 10,  # How often to log to wandb
         "val_every": 10,  # How often to run validation

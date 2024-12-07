@@ -18,6 +18,83 @@ from PIL import Image
 DEBUG_PRINTS = False
 
 
+class QueryBlock(nn.Module):
+    def __init__(
+        self,
+        input_dim,
+        hidden_dim,
+        output_dim,
+        num_linears,
+        num_queries,
+        expand_factor,
+        num_heads,
+        dropout,
+    ):
+        """
+        Adapter module from the output of AlphaClip from the segmentation model to the input of the LLava model
+        
+        Args:
+            input_dim (int): Dimension of the input segment embeddings
+            hidden_dim (int): Dimension of the hidden layers in the adapter module
+            output_dim (int): Dimension of the output layer in the adapter module
+            num_linears (int): Number of linear layers to use in the adapter module
+            num_queries (int): Number of queries to use in the multi-head attention layer
+            expand_factor (int): Factor to expand the hidden dimension in the FFN
+            dropout (float): Dropout rate to apply in the adapter module
+            num_heads (int): Number of heads to use in the multi-head attention layer
+        """
+        super(QueryBlock, self).__init__()
+
+        self.linears = nn.ModuleList(
+            [nn.Linear(input_dim, hidden_dim) for _ in range(num_linears)]
+        )
+
+        self.attention = nn.MultiheadAttention(
+            hidden_dim, num_heads=num_heads, batch_first=True, dropout=dropout
+        )
+
+        query = torch.randn(1, num_queries, hidden_dim)
+        self.query = nn.Parameter(query)
+
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * expand_factor),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * expand_factor, hidden_dim),
+        )
+
+        if input_dim != output_dim:
+            self.skip = nn.Linear(input_dim, output_dim)
+        else:
+            self.skip = nn.Identity()
+
+        self.norm = nn.LayerNorm(output_dim)
+
+    def forward(self, input):
+        """
+        Forward pass through the adapter module
+
+        Args:
+            input (torch.Tensor): Input tensor with shape (num_segments, input_segment_dim)
+
+        Returns:
+            x (torch.Tensor): Output tensor with shape (num_segments, output_dim)
+        """
+        x = [linear(input) for linear in self.linears]
+        x = torch.stack(x, dim=1)
+
+        query = self.query.repeat(x.size(0), 1, 1)
+        x, _ = self.attention(query=query, key=x, value=x)
+
+        x = self.ffn(x)
+        x = x.mean(dim=1)
+
+        x = self.skip(input) + x
+        x = self.norm(x)
+
+        return x
+
+
 class SegAdapter(nn.Module):
     """
     Adapter module from the output of AlphaClip from the segmentation model to the input of the LLava model
@@ -27,12 +104,12 @@ class SegAdapter(nn.Module):
         self,
         input_segment_dim: int,
         llava_embedding_dim: int,
-        num_linears: int = 25,
         hidden_dim: int = None,
         expand_factor: int = 2,
+        num_heads: int = [1],
+        num_linears: int = [25],
+        num_queries: int = [10],
         dropout: float = 0.25,
-        num_heads: int = 1,
-        num_queries: int = 10,
     ):
         """
         Adapter module from the output of AlphaClip from the segmentation model to the input of the LLava model
@@ -46,34 +123,38 @@ class SegAdapter(nn.Module):
             dropout (float): Dropout rate to apply in the adapter module
             num_heads (int): Number of heads to use in the multi-head attention layer
             num_queries (int): Number of queries to use in the multi-head attention layer
+            blocks (int): Number of blocks to use in the adapter module
         """
         super().__init__()
 
-        hidden_dim = hidden_dim if hidden_dim is not None else llava_embedding_dim
-        self.linears = nn.ModuleList(
-            [nn.Linear(input_segment_dim, hidden_dim) for _ in range(num_linears)]
-        )
+        if hidden_dim is None:
+            hidden_dim = llava_embedding_dim
 
-        # multi-head attention
-        self.attention = nn.MultiheadAttention(
-            hidden_dim, num_heads=num_heads, batch_first=True, dropout=dropout
-        )
+        blocks = []
+        input_dim = input_segment_dim
+        for i in range(len(num_linears)):
+            if i == len(num_linears) - 1:
+                output_dim = llava_embedding_dim
+            else:
+                output_dim = hidden_dim
+            blocks.append(
+                QueryBlock(
+                    input_dim,
+                    hidden_dim,
+                    output_dim,
+                    num_linears[i],
+                    num_queries[i],
+                    expand_factor,
+                    num_heads[i],
+                    dropout,
+                )
+            )
+            input_dim = output_dim
+        self.blocks = nn.ModuleList(blocks)
 
-        query = torch.randn(1, num_queries, hidden_dim)
-        self.query = nn.Parameter(query)
-
-        # FFN
-        self.ffn = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * expand_factor),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim * expand_factor, hidden_dim),
-        )
-
-        self.linear = nn.Linear(hidden_dim, llava_embedding_dim)
-        self.skip = nn.Linear(input_segment_dim, llava_embedding_dim)
-
+        self.final_skip = nn.Linear(input_segment_dim, llava_embedding_dim)
         self.norm = nn.LayerNorm(llava_embedding_dim)
+
         self.mean_emb = nn.Parameter(torch.zeros(llava_embedding_dim))
         self.std_emb = nn.Parameter(torch.ones(llava_embedding_dim))
 
@@ -87,27 +168,15 @@ class SegAdapter(nn.Module):
         Returns:
             llava_input (torch.Tensor): Input tensor for the LLava model with shape (seq_length, llava_embedding_dim)
         """
-        # Apply linear layers x shape (
-        x = [
-            linear(segment_embeddings) for linear in self.linears
-        ]  # list of shape (num_segments, hidden_dim)
-        # shape (num_segments, num_linears, hidden_dim)
-        x = torch.stack(x, dim=1)
-
-        # Apply multi-head attention
-
-        query = self.query.repeat(x.size(0), 1, 1)
-        x, _ = self.attention(query=query, key=x, value=x)
-        x = x.mean(dim=1)
-
-        # Apply FFN
-        x = self.ffn(x)
-
+        x = segment_embeddings
+        for block in self.blocks:
+            x = block(x)
+        
         # Apply linear layer
-        llava_input = self.linear(x) + self.skip(segment_embeddings)
+        llava_input = self.norm(x + self.final_skip(segment_embeddings))
 
         # normalize the output
-        llava_input = self.norm(llava_input) * self.std_emb + self.mean_emb
+        llava_input = llava_input * self.std_emb + self.mean_emb
 
         return llava_input
 
