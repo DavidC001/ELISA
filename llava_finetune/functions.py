@@ -48,6 +48,7 @@ def run_experiment(exp_name, exp_config, config, data_loaders):
 
     EPOCHS = exp_config["epochs"]
     log_interval = exp_config.get("log_interval", 10)
+    val_every = exp_config.get("val_every", 10)
 
     for epoch in range(EPOCHS):
         model.train()
@@ -70,8 +71,8 @@ def run_experiment(exp_name, exp_config, config, data_loaders):
         tqdm.write(f"Epoch {epoch+1}/{EPOCHS} - Train Loss: {avg_loss:.4f}")
         wandb.log({"train/avg_loss": avg_loss, "epoch": epoch+1})
 
-        # Validation every 10 epochs or last epoch
-        if (epoch + 1) % 10 == 0 or (epoch + 1) == EPOCHS:
+        # Validation every val_every epochs or last epoch
+        if (epoch + 1) % val_every == 0 or (epoch + 1) == EPOCHS:
             model.eval()
             accuracy = []
             rand_accuracy = []
@@ -84,14 +85,15 @@ def run_experiment(exp_name, exp_config, config, data_loaders):
 
             with torch.no_grad():
                 for batch in tqdm(data_val_loader, desc=f"Validation Epoch {epoch+1}", leave=False):
-                    out = model.generate(
+                    texts, tokens = model.generate(
                         batch["queries"],
                         batch["image"],
                         batch["gt_embs"],
                         batch["sam_embs"],
                     )
-                    for i in range(len(out)):
-                        generated_masks = [int(m.strip(">")) for m in out[i].split("<SEG_MASK_")[1:] if m.endswith(">")]
+                    for i in range(len(tokens)):
+                        # extract all tokens >model.llava_model.tokenizer_vocab_size to get the generated masks
+                        generated_masks = (tokens[i][tokens[i] > model.llava_model.tokenizer_vocab_size] - model.llava_model.tokenizer_vocab_size).tolist()
                         positive_masks = set(range(1, len(batch["gt_embs"][i]) + 1))
                         negative_masks = set(range(len(batch["gt_embs"][i]) + 1, len(batch["gt_embs"][i]) + len(batch["sam_embs"][i]) + 1))
 

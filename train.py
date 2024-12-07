@@ -12,11 +12,11 @@ config = load_yaml_config("config.yaml")
 # 1. Experiment Configurations
 # ==========================
 experiments_config = {
-    "test": {
+    "local_test": {
         "epochs": 200,
         "optimizer": {
             "adapter_lr": 1e-3,
-            "lora_lr": 1e-8,
+            "lora_lr": 1e-6,
         },
         "model_params": {
             # General Parameters
@@ -31,7 +31,8 @@ experiments_config = {
             "num_heads": 1, 
             "num_queries": 10,
         },
-        "log_interval": 10  # How often to log to wandb
+        "log_interval": 10,  # How often to log to wandb
+        "val_every": 10,  # How often to run validation
     }
 }
 
@@ -46,9 +47,9 @@ if __name__ == "__main__":
         config.dataset.json_path,
         config.dataset.image_dir,
         5,
-        "ReasonSeg/data/train-v2.jsonl",
-        "ReasonSeg/data/val-v2.jsonl",
-        "ReasonSeg/data/test-v2.jsonl"
+        "data/train-v2.jsonl",
+        "data/val-v2.jsonl",
+        "data/test-v2.jsonl"
     )
     print("Datasets Loaded Successfully")
 

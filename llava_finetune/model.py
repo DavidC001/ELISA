@@ -8,6 +8,8 @@ from transformers import (
     LlavaProcessor,
     PreTrainedModel,
     BitsAndBytesConfig,
+    StoppingCriteriaList,
+    EosTokenCriteria
 )
 from peft import LoraConfig, get_peft_model
 
@@ -92,7 +94,6 @@ class SegAdapter(nn.Module):
         llava_input = self.norm(llava_input) * self.std_emb + self.mean_emb
         
         return llava_input
-
 
 # Define the custom model class
 class DynamicVocabLlavaModel(nn.Module):
@@ -284,6 +285,7 @@ class LISA_Model(nn.Module):
         self.llava_model = DynamicVocabLlavaModel(model, processor)
         
         self.end_token = end_turn_token
+        self.tokenized_end_token = processor.tokenizer.encode(end_turn_token, add_special_tokens=False)[0]
         
         self.device = device
 
@@ -364,19 +366,14 @@ class LISA_Model(nn.Module):
         new_tokens = self.adapter(new_tokens.to(self.device))
 
         # tokenize the texts
-        inputs = self.llava_model.processor(text=input_texts, images=images, return_tensors="pt", padding=True).to(self.device)
-        # remove last two token from the input text (the <end_of_turn> token <eos> token)
-        inputs["input_ids"] = inputs["input_ids"][:, :-2]
+        inputs = self.llava_model.processor(text=input_texts, images=images, return_tensors="pt", padding=True, add_special_tokens=False).to(self.device)
+        # remove last token from the input text
+        inputs["input_ids"] = inputs["input_ids"][:, :-1]
         
         labels_ids = self.llava_model.processor(
-            text=labels, return_tensors="pt", padding=True, truncation=True
+            text=labels, return_tensors="pt", padding=True, truncation=True, add_special_tokens=False
         )
         labels_input_ids = labels_ids["input_ids"].to(self.device)
-        # remove the last token from the labels (the <eos> token) and the first token (the <bos> token)
-        labels_input_ids = labels_input_ids[:, :-1]
-        # remove all the bos tokens from the labels and make them padded
-        labels_input_ids[labels_input_ids == self.llava_model.processor.tokenizer.bos_token_id] = self.llava_model.processor.tokenizer.pad_token_id
-        
         
         # print()
         # print("MODEL TOKENS INPUT")
@@ -438,6 +435,7 @@ class LISA_Model(nn.Module):
             List[str]: List of generated text sequences
         """
         outputs = []
+        tokens = []
         for i in range(len(texts)):
             transformed_pos = self.adapter(pos_mask_embeds[i].to(self.device))
             transformed_neg = self.adapter(neg_mask_embeds[i].to(self.device))
@@ -455,20 +453,21 @@ class LISA_Model(nn.Module):
             
             # tokenize the texts
             inputs = self.llava_model.processor(
-                text=input_text, images=images[i], return_tensors="pt", padding=True
+                text=input_text, images=images[i], return_tensors="pt", padding=True, add_special_tokens=False
             ).to(self.device)
 
             # call generate on the model
-            generated = self.llava_model.llava_model.generate(
-                **inputs, max_length=100, num_beams=1
+            generated_tok = self.llava_model.llava_model.generate(
+                **inputs, num_beams=1, max_new_tokens=500, eos_token_id=self.tokenized_end_token
             )
-            generated = self.llava_model.processor.batch_decode(generated, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+            generated = self.llava_model.processor.batch_decode(generated_tok, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]
             # get only from model\n afterwords
             generated = generated.split("model\n")[1]
             self.llava_model.reset_tokens()
             
             outputs.append(generated)
-        return outputs
+            tokens.append(generated_tok[0])
+        return outputs, tokens
         
     def forward(self, **kwargs):
         if self.training:
