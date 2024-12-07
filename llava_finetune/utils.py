@@ -120,6 +120,6 @@ def initialize_wandb(exp_name, exp_config):
     """
     wandb.init(
         project="LISA_ACV",
-        name=exp_name,
+        name=exp_name+"_"+wandb.util.generate_id(),
         config=exp_config
     )
