@@ -419,19 +419,19 @@ class LISA_Model(nn.Module):
         token_masks[:, : self.llava_model.tokenizer_vocab_size + 1] = 1
         token_masks[:, self.llava_model.tokenizer_vocab_size + num_new_tokens + 1 :] = 1
 
-        answers = []
 
         # Pass all tokens to the adapter and add the corresponding token lemma to the labels texts
         for i in range(len(pos_mask_embeds)):
-            answers.append("")
+            if self.seg_pos == "before":
+                labels[i] = " "+labels[i]
+            elif self.seg_pos == "after":
+                labels[i] = labels[i]+" "
             for j in range(pos_mask_embeds[i].size(0)):
                 new_tokens.append(pos_mask_embeds[i][j])
                 if self.seg_pos == "before":
                     labels[i] = f"<SEG_MASK_{free_token}>{labels[i]}"
-                    answers[i] = f"<SEG_MASK_{free_token}>{answers[i]}"
                 elif self.seg_pos == "after":
                     labels[i] = f"{labels[i]}<SEG_MASK_{free_token}>"
-                    answers[i] = f"{answers[i]}<SEG_MASK_{free_token}>"
                 token_masks[
                     i, self.llava_model.tokenizer_vocab_size + free_token
                 ] = 1
@@ -450,7 +450,6 @@ class LISA_Model(nn.Module):
             )
             # get the last token of the text as the end token to be added to the labels
             labels[i] += f"{self.end_token}"
-            answers[i] += f"{self.end_token}"
 
         if DEBUG_PRINTS:
             print()
