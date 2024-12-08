@@ -310,6 +310,7 @@ class LISA_Model(nn.Module):
         seg_emb_size: int,
         max_new_tokens: int = 100,
         end_turn_token: str = "<end_of_turn>\n",
+        seg_pos: str = "before",
         q4: bool = True,
         q8: bool = False,
         device: str = "cuda",
@@ -330,6 +331,7 @@ class LISA_Model(nn.Module):
         super(LISA_Model, self).__init__()
         self.seg_emb_size = seg_emb_size
         self.max_new_tokens = max_new_tokens
+        self.seg_pos = seg_pos
 
         # Initialize the processor
         processor = LlavaProcessor.from_pretrained(model_name)
@@ -421,12 +423,15 @@ class LISA_Model(nn.Module):
 
         # Pass all tokens to the adapter and add the corresponding token lemma to the labels texts
         for i in range(len(pos_mask_embeds)):
-            answers.append("Here is the segmentation masks for the provided image:\n")
-            labels[i] += f"Here is the segmentation masks for the provided image:\n"
+            answers.append("")
             for j in range(pos_mask_embeds[i].size(0)):
                 new_tokens.append(pos_mask_embeds[i][j])
-                labels[i] += f"<SEG_MASK_{free_token}>"
-                answers[i] += f"<SEG_MASK_{free_token}>"
+                if self.seg_pos == "before":
+                    labels[i] = f"<SEG_MASK_{free_token}>{labels[i]}"
+                    answers[i] = f"<SEG_MASK_{free_token}>{answers[i]}"
+                elif self.seg_pos == "after":
+                    labels[i] = f"{labels[i]}<SEG_MASK_{free_token}>"
+                    answers[i] = f"{answers[i]}<SEG_MASK_{free_token}>"
                 token_masks[
                     i, self.llava_model.tokenizer_vocab_size + free_token
                 ] = 1

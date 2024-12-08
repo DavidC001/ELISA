@@ -19,8 +19,8 @@ yaml_config = load_yaml_config("config.yaml")
 
 # Define the configuration dictionary
 config = {
-    "model_new_loss_new_adapter": {
-        "model_path": "models/model_new_loss_new_adapter.pth",  # Path to the trained model's state_dict
+    "model_llava_seg": {
+        "model_path": "models/model_llava_seg.pth",  # Path to the trained model's state_dict
         "test_jsonl": "data/val-v2.jsonl",                     # Path to the test JSONL file
         "image_dir": yaml_config.dataset.image_dir,             # Directory containing test images
         "num_samples": 1,                                      # Number of samples to inspect

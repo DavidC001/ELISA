@@ -32,6 +32,8 @@ experiments_config = {
             "num_heads": [1, 1],
             "num_queries": [10, 1],
             "dropout": 0.25,
+            # Others
+            "seg_pos": "before", # "before" or "after"
         },
         "log_interval": 10,  # How often to log to wandb
         "val_every": 1,  # How often to run validation
