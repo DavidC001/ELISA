@@ -13,11 +13,11 @@ config = load_yaml_config("config.yaml")
 # 1. Experiment Configurations
 # ==========================
 experiments_config = {
-    "local_test": {
-        "epochs": 200,
+    "llava_seg": {
+        "epochs": 1,
         "optimizer": {
             "adapter_lr": 1e-3,
-            "lora_lr": 1e-8,
+            "lora_lr": 1e-5,
         },
         "model_params": {
             # General Parameters
@@ -34,7 +34,7 @@ experiments_config = {
             "dropout": 0.25,
         },
         "log_interval": 10,  # How often to log to wandb
-        "val_every": 10,  # How often to run validation
+        "val_every": 1,  # How often to run validation
     }
 }
 
