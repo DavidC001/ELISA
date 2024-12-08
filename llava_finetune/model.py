@@ -421,7 +421,8 @@ class LISA_Model(nn.Module):
 
         # Pass all tokens to the adapter and add the corresponding token lemma to the labels texts
         for i in range(len(pos_mask_embeds)):
-            answers.append("")
+            answers.append("Here is the segmentation masks for the provided image:\n")
+            labels[i] += f"Here is the segmentation masks for the provided image:\n"
             for j in range(pos_mask_embeds[i].size(0)):
                 new_tokens.append(pos_mask_embeds[i][j])
                 labels[i] += f"<SEG_MASK_{free_token}>"
@@ -516,6 +517,8 @@ class LISA_Model(nn.Module):
 
         weights = torch.ones_like(labels_input_ids) * 0.5
         weights[labels_input_ids > self.llava_model.tokenizer_vocab_size] = 2
+        # penilize the model for not generating the end tokens
+        weights[labels_input_ids == self.tokenized_end_token] = 2
         loss = (loss * weights).mean()
 
         # if loss is nan break
@@ -567,7 +570,7 @@ class LISA_Model(nn.Module):
         for i in range(len(texts)):
             transformed_pos = self.adapter(pos_mask_embeds[i].to(self.device))
             transformed_neg = self.adapter(neg_mask_embeds[i].to(self.device))
-            new_tokens = torch.cat([transformed_pos, transformed_neg])
+            new_tokens = torch.cat([transformed_pos,transformed_neg])
             self.llava_model.add_tokens(new_tokens)
 
             # apply the chat template to the texts
