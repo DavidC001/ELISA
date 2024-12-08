@@ -25,6 +25,28 @@ wheels = [
 ]
 
 [[package]]
+name = "alpha-clip"
+version = "1.0"
+source = { directory = "../../models/AlphaCLIP" }
+dependencies = [
+    { name = "ftfy" },
+    { name = "regex" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ftfy" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "regex" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+]
+
+[[package]]
 name = "bitsandbytes"
 version = "0.44.1"
 source = { registry = "https://pypi.org/simple" }
@@ -83,6 +105,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cc/67/e5e7e0cbfefc4ca79025238b43cdf8a2037854195b37d6417f3d0895c4c2/charset_normalizer-3.4.0-cp313-cp313-win32.whl", hash = "sha256:f19c1585933c82098c2a520f8ec1227f20e339e33aca8fa6f956f6691b784e67", size = 94973 },
     { url = "https://files.pythonhosted.org/packages/65/97/fc9bbc54ee13d33dc54a7fcf17b26368b18505500fc01e228c27b5222d80/charset_normalizer-3.4.0-cp313-cp313-win_amd64.whl", hash = "sha256:707b82d19e65c9bd28b81dde95249b07bf9f5b90ebe1ef17d9b57473f8a64b7b", size = 102308 },
     { url = "https://files.pythonhosted.org/packages/bf/9b/08c0432272d77b04803958a4598a51e2a4b51c06640af8b8f0f908c18bf2/charset_normalizer-3.4.0-py3-none-any.whl", hash = "sha256:fe9f97feb71aa9896b81973a7bbada8c49501dc73e58a10fcef6663af95e5079", size = 49446 },
+]
+
+[[package]]
+name = "clip"
+version = "1.0"
+source = { git = "https://github.com/openai/CLIP.git#dcba3cb2e2827b402d2701e7e1c7d9fed8a20ef1" }
+dependencies = [
+    { name = "ftfy" },
+    { name = "packaging" },
+    { name = "regex" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
 ]
 
 [[package]]
@@ -188,6 +223,18 @@ wheels = [
 ]
 
 [[package]]
+name = "ftfy"
+version = "6.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/d3/8650919bc3c7c6e90ee3fa7fd618bf373cbbe55dff043bd67353dbb20cd8/ftfy-6.3.1.tar.gz", hash = "sha256:9b3c3d90f84fb267fe64d375a07b7f8912d817cf86009ae134aa03e1819506ec", size = 308927 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/6e/81d47999aebc1b155f81eca4477a616a70f238a2549848c38983f3c22a82/ftfy-6.3.1-py3-none-any.whl", hash = "sha256:7c70eb532015cd2f9adb53f101fb6c7945988d023a085d127d1573dc49dd0083", size = 44821 },
+]
+
+[[package]]
 name = "huggingface-hub"
 version = "0.26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -271,7 +318,11 @@ name = "lisa-acv"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "alpha-clip" },
     { name = "bitsandbytes" },
+    { name = "clip" },
+    { name = "ftfy" },
+    { name = "loralib" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "opencv-python" },
@@ -279,6 +330,7 @@ dependencies = [
     { name = "pillow" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "regex" },
     { name = "segment-anything" },
     { name = "torch" },
     { name = "torchvision" },
@@ -288,7 +340,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alpha-clip", directory = "../../models/AlphaCLIP" },
     { name = "bitsandbytes", specifier = ">=0.44.1" },
+    { name = "clip", git = "https://github.com/openai/CLIP.git" },
+    { name = "ftfy", specifier = ">=6.3.1" },
+    { name = "loralib", specifier = ">=0.1.2" },
     { name = "matplotlib", specifier = ">=3.9.2" },
     { name = "numpy", specifier = ">=2.1.3" },
     { name = "opencv-python", specifier = ">=4.10.0.84" },
@@ -296,11 +352,21 @@ requires-dist = [
     { name = "pillow", specifier = ">=11.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "regex", specifier = ">=2024.11.6" },
     { name = "segment-anything", git = "https://github.com/facebookresearch/segment-anything.git" },
     { name = "torch", specifier = ">=2.5.1" },
     { name = "torchvision", specifier = ">=0.20.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "transformers", specifier = "<4.47" },
+    { name = "transformers", specifier = "==4.46.0" },
+]
+
+[[package]]
+name = "loralib"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3d/da/117193e94c47dc5288b17443d53d8c4b373c59e37d2ffda7e275e0cea717/loralib-0.1.2.tar.gz", hash = "sha256:22ccff494a6254b973ddaee9f9aad4657941cab4221c75c5a04e0cac4fbd4567", size = 14552 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/e7/a4362bf791bca17d2d91e7c69483185ab03d5aa05dd10391eff2e179a685/loralib-0.1.2-py3-none-any.whl", hash = "sha256:e341c9a507b180f3b8e70914efef9f6b19d1aa3996dec546b180cfbd027059e9", size = 10390 },
 ]
 
 [[package]]
@@ -926,7 +992,7 @@ wheels = [
 
 [[package]]
 name = "transformers"
-version = "4.46.3"
+version = "4.46.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -940,9 +1006,9 @@ dependencies = [
     { name = "tokenizers" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/37/5a/58f96c83e566f907ae39f16d4401bbefd8bb85c60bd1e6a95c419752ab90/transformers-4.46.3.tar.gz", hash = "sha256:8ee4b3ae943fe33e82afff8e837f4b052058b07ca9be3cb5b729ed31295f72cc", size = 8627944 }
+sdist = { url = "https://files.pythonhosted.org/packages/30/9b/f414289d6a5f334927257038eda54206fb319d413f56d02a15a9be89f435/transformers-4.46.0.tar.gz", hash = "sha256:3a9e2eb537094db11c3652334d281afa4766c0e5091c4dcdb454e9921bb0d2b7", size = 8610836 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/51/b87caa939fedf307496e4dbf412f4b909af3d9ca8b189fc3b65c1faa456f/transformers-4.46.3-py3-none-any.whl", hash = "sha256:a12ef6f52841fd190a3e5602145b542d03507222f2c64ebb7ee92e8788093aef", size = 10034536 },
+    { url = "https://files.pythonhosted.org/packages/db/88/1ef8a624a33d7fe460a686b9e0194a7916320fc0d67d4e38e570beeac039/transformers-4.46.0-py3-none-any.whl", hash = "sha256:e161268ae8bee315eb9e9b4c0b27f1bd6980f91e0fc292d75249193d339704c0", size = 10033948 },
 ]
 
 [[package]]
@@ -972,4 +1038,13 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ed/63/22ba4ebfe7430b76388e7cd448d5478814d3032121827c12a2cc287e2260/urllib3-2.2.3.tar.gz", hash = "sha256:e7d814a81dad81e6caf2ec9fdedb284ecc9c73076b62654547cc64ccdcae26e9", size = 300677 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/d9/5f4c13cecde62396b0d3fe530a50ccea91e7dfc1ccf0e09c228841bb5ba8/urllib3-2.2.3-py3-none-any.whl", hash = "sha256:ca899ca043dcb1bafa3e262d73aa25c465bfb49e0bd9dd5d59f1d0acba2f8fac", size = 126338 },
+]
+
+[[package]]
+name = "wcwidth"
+version = "0.2.13"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6c/63/53559446a878410fc5a5974feb13d31d78d752eb18aeba59c7fef1af7598/wcwidth-0.2.13.tar.gz", hash = "sha256:72ea0c06399eb286d978fdedb6923a9eb47e1c486ce63e9b4e64fc18303972b5", size = 101301 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/84/fd2ba7aafacbad3c4201d395674fc6348826569da3c0937e75505ead3528/wcwidth-0.2.13-py2.py3-none-any.whl", hash = "sha256:3da69048e4540d84af32131829ff948f1e022c1c6bdb8d6102117aac784f6859", size = 34166 },
 ]

@@ -81,43 +81,49 @@ class SegmentationMaskExtractor:
             :return: List of tuples where each tuple contains the path to an image and its corresponding segmentation masks.
         """
 
-        print(f"Extracting masks from {path}...")
-
         if isinstance(path, list):
-            res = [(img, self.segment(img)) for img in tqdm(path)]
+            res = [(img, self.segment_path(img)) for img in tqdm(path)]
         else:
             if os.path.isdir(path):
                 res = [
-                    (img, self.segment(os.path.join(path, img))) for img in tqdm(os.listdir(path))
+                    (img, self.segment_path(os.path.join(path, img)))
+                    for img in tqdm(os.listdir(path))
                 ]
 
             else:
-                res = [(str(path), self.segment(path))]
-
-        print(f"Mask extraction from {path} complete.")
+                res = [(str(path), self.segment_path(path))]
 
         return res
 
-    def segment(self, image_path: os.PathLike) -> list[SegmentationMask]:
+    def segment_path(self, image_path: os.PathLike) -> list[SegmentationMask]:
         """
         Extracts segmentation masks from an image.
             :param image_path: Path to the image.
             :return: List of segmentation masks.
         """
-        try:
-            image = cv2.imread(image_path)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            image = cv2.resize(image, (self.config.resize, self.config.resize))
+        image = cv2.imread(image_path)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.resize(image, (self.config.resize, self.config.resize))
 
-            masks = self.mask_generator.generate(image)
+        return self.segment_img(image)
+
+    def segment_img(self, img: np.ndarray) -> list[SegmentationMask]:
+        """
+        Extracts segmentation masks from an image.
+            :param img: Image as a numpy array.
+            :return: List of segmentation masks.
+        """
+        try:
+            masks = self.mask_generator.generate(img)
 
             masks.sort(key=(lambda x: x["area"]), reverse=True)
-            masks = masks[: self.config.n_masks]
+            if self.config.n_masks > 0:
+                masks = masks[: self.config.n_masks]
 
             return masks
 
         except Exception as e:
-            print(f"Error processing {image_path}: {e}")
+            print(f"Error processing image: {e}")
             return []
 
 

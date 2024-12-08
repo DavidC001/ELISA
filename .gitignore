@@ -162,3 +162,7 @@ cython_debug/
 #.idea/
 
 config.yaml
+config_davide.yaml
+
+checkpoints
+data

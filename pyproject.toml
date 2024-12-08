@@ -5,7 +5,11 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alpha-clip",
     "bitsandbytes>=0.44.1",
+    "clip",
+    "ftfy>=6.3.1",
+    "loralib>=0.1.2",
     "matplotlib>=3.9.2",
     "numpy>=2.1.3",
     "opencv-python>=4.10.0.84",
@@ -13,12 +17,15 @@ dependencies = [
     "pillow>=11.0.0",
     "python-dotenv>=1.0.1",
     "pyyaml>=6.0.2",
+    "regex>=2024.11.6",
     "segment-anything",
     "torch>=2.5.1",
     "torchvision>=0.20.1",
     "tqdm>=4.67.1",
-    "transformers<4.47",
+    "transformers==4.46.0",
 ]
 
 [tool.uv.sources]
 segment-anything = { git = "https://github.com/facebookresearch/segment-anything.git" }
+alpha-clip = { path = "../../models/AlphaCLIP" }
+clip = { git = "https://github.com/openai/CLIP.git" }

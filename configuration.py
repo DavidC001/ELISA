@@ -58,10 +58,20 @@ class SAMConfig:
 
 
 @dataclass
+class AlphaCLIPConfig:
+    model: str
+    checkpoint_dir: str
+
+    def __post_init__(self):
+        self.checkpoint_dir = os.path.expanduser(self.checkpoint_dir)
+
+
+@dataclass
 class ProjectConfig:
     llava: LLavaConfig
     dataset: DatasetConfig
     sam: SAMConfig
+    alphaclip: AlphaCLIPConfig
 
 
 def load_yaml_config(path) -> ProjectConfig:
