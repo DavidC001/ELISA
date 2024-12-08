@@ -28,7 +28,7 @@ experiments_config = {
             # Adapter Parameters
             "hidden_dim": None,
             "expand_factor": 2,
-            "num_linears": [25, 10],
+            "num_linears": 25,
             "num_heads": [1, 1],
             "num_queries": [10, 1],
             "dropout": 0.25,

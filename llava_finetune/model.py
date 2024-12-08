@@ -22,9 +22,7 @@ class QueryBlock(nn.Module):
     def __init__(
         self,
         input_dim,
-        hidden_dim,
         output_dim,
-        num_linears,
         num_queries,
         expand_factor,
         num_heads,
@@ -34,10 +32,8 @@ class QueryBlock(nn.Module):
         Adapter module from the output of AlphaClip from the segmentation model to the input of the LLava model
         
         Args:
-            input_dim (int): Dimension of the input segment embeddings
-            hidden_dim (int): Dimension of the hidden layers in the adapter module
+            input_dim (int): Dimension of the hidden layers in the adapter module
             output_dim (int): Dimension of the output layer in the adapter module
-            num_linears (int): Number of linear layers to use in the adapter module
             num_queries (int): Number of queries to use in the multi-head attention layer
             expand_factor (int): Factor to expand the hidden dimension in the FFN
             dropout (float): Dropout rate to apply in the adapter module
@@ -45,28 +41,19 @@ class QueryBlock(nn.Module):
         """
         super(QueryBlock, self).__init__()
 
-        self.linears = nn.ModuleList(
-            [nn.Linear(input_dim, hidden_dim) for _ in range(num_linears)]
-        )
-
         self.attention = nn.MultiheadAttention(
-            hidden_dim, num_heads=num_heads, batch_first=True, dropout=dropout
+            input_dim, num_heads=num_heads, batch_first=True, dropout=dropout
         )
 
-        query = torch.randn(1, num_queries, hidden_dim)
+        query = torch.randn(1, num_queries, input_dim)
         self.query = nn.Parameter(query)
 
         self.ffn = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * expand_factor),
+            nn.Linear(input_dim, input_dim * expand_factor),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim * expand_factor, hidden_dim),
+            nn.Linear(input_dim * expand_factor, input_dim),
         )
-
-        if input_dim != output_dim:
-            self.skip = nn.Linear(input_dim, output_dim)
-        else:
-            self.skip = nn.Identity()
 
         self.norm = nn.LayerNorm(output_dim)
 
@@ -80,16 +67,11 @@ class QueryBlock(nn.Module):
         Returns:
             x (torch.Tensor): Output tensor with shape (num_segments, output_dim)
         """
-        x = [linear(input) for linear in self.linears]
-        x = torch.stack(x, dim=1)
-
-        query = self.query.repeat(x.size(0), 1, 1)
-        x, _ = self.attention(query=query, key=x, value=x)
+        query = self.query.repeat(input.size(0), 1, 1)
+        x, _ = self.attention(query=query, key=input, value=input)
 
         x = self.ffn(x)
-        x = x.mean(dim=1)
 
-        x = self.skip(input) + x
         x = self.norm(x)
 
         return x
@@ -106,8 +88,8 @@ class SegAdapter(nn.Module):
         llava_embedding_dim: int,
         hidden_dim: int = None,
         expand_factor: int = 2,
+        num_linears: int = 25,
         num_heads: int = [1],
-        num_linears: int = [25],
         num_queries: int = [10],
         dropout: float = 0.25,
     ):
@@ -129,30 +111,31 @@ class SegAdapter(nn.Module):
 
         if hidden_dim is None:
             hidden_dim = llava_embedding_dim
+            
+        self.linears = nn.ModuleList( [nn.Linear(input_segment_dim, hidden_dim) for _ in range(num_linears)] )
 
         blocks = []
-        input_dim = input_segment_dim
-        for i in range(len(num_linears)):
-            if i == len(num_linears) - 1:
+        skips = []
+        input_dim = hidden_dim
+        output_dim = hidden_dim
+        for i in range(len(num_heads)):
+            if i == len(num_heads) - 1:
                 output_dim = llava_embedding_dim
-            else:
-                output_dim = hidden_dim
             blocks.append(
                 QueryBlock(
                     input_dim,
-                    hidden_dim,
                     output_dim,
-                    num_linears[i],
                     num_queries[i],
                     expand_factor,
                     num_heads[i],
                     dropout,
                 )
             )
-            input_dim = output_dim
+            skips.append(nn.Linear(input_dim, llava_embedding_dim, bias=False))
         self.blocks = nn.ModuleList(blocks)
+        self.skips = nn.ModuleList(skips)
 
-        self.final_skip = nn.Linear(input_segment_dim, llava_embedding_dim)
+        self.final_skip = nn.Linear(input_segment_dim, llava_embedding_dim, bias=False)
         self.norm = nn.LayerNorm(llava_embedding_dim)
 
         self.mean_emb = nn.Parameter(torch.zeros(llava_embedding_dim))
@@ -168,12 +151,18 @@ class SegAdapter(nn.Module):
         Returns:
             llava_input (torch.Tensor): Input tensor for the LLava model with shape (seq_length, llava_embedding_dim)
         """
-        x = segment_embeddings
-        for block in self.blocks:
-            x = block(x)
+        llava_input = self.final_skip(segment_embeddings)
         
-        # Apply linear layer
-        llava_input = self.norm(x + self.final_skip(segment_embeddings))
+        x = [linear(segment_embeddings) for linear in self.linears]
+        x = torch.stack(x, dim=1)
+        for i in range(len(self.blocks)):
+            llava_input += self.skips[i](x.mean(dim=1))
+            x = self.blocks[i](x)
+
+        x = x.mean(dim=1)
+        llava_input += x
+        
+        llava_input = self.norm(llava_input)
 
         # normalize the output
         llava_input = llava_input * self.std_emb + self.mean_emb
@@ -238,6 +227,8 @@ class DynamicVocabLlavaModel(nn.Module):
         logits = outputs.logits
 
         if token_masks is not None:
+            # logits is (batch_size, seq_length, vocab_size) and token_masks is (batch_size, vocab_size) so we need to expand token_masks
+            token_masks = token_masks.unsqueeze(1).expand(-1, logits.size(1), -1)
             # Apply the token masks to the logits
             logits = logits * token_masks
 
@@ -417,12 +408,14 @@ class LISA_Model(nn.Module):
             [pos_mask_embeds[i].size(0) for i in range(len(pos_mask_embeds))]
             + [neg_mask_embeds[i].size(0) for i in range(len(neg_mask_embeds))]
         )
+        num_pos_tokens = sum([pos_mask_embeds[i].size(0) for i in range(len(pos_mask_embeds))])
+        num_neg_tokens = sum([neg_mask_embeds[i].size(0) for i in range(len(neg_mask_embeds))])
 
         token_masks = torch.zeros(
             len(texts), self.llava_model.original_vocab_size + num_new_tokens
         ).to(self.device)
-        token_masks[:, : self.llava_model.tokenizer_vocab_size] = 1
-        token_masks[:, self.llava_model.tokenizer_vocab_size + num_new_tokens - 1 :] = 1
+        token_masks[:, : self.llava_model.tokenizer_vocab_size + 1] = 1
+        token_masks[:, self.llava_model.tokenizer_vocab_size + num_new_tokens + 1 :] = 1
 
         answers = []
 
@@ -434,7 +427,7 @@ class LISA_Model(nn.Module):
                 labels[i] += f"<SEG_MASK_{free_token}>"
                 answers[i] += f"<SEG_MASK_{free_token}>"
                 token_masks[
-                    i, self.llava_model.tokenizer_vocab_size + free_token - 1
+                    i, self.llava_model.tokenizer_vocab_size + free_token
                 ] = 1
                 free_token += 1
 
@@ -464,7 +457,7 @@ class LISA_Model(nn.Module):
             for j in range(neg_mask_embeds[i].size(0)):
                 new_tokens.append(neg_mask_embeds[i][j])
                 token_masks[
-                    i, self.llava_model.tokenizer_vocab_size + free_token - 1
+                    i, self.llava_model.tokenizer_vocab_size + free_token
                 ] = 1
                 free_token += 1
 
@@ -503,27 +496,32 @@ class LISA_Model(nn.Module):
             additional_tokens=new_tokens,
             num_generate=labels_input_ids.size(1),
             reset_tokens=False,
-            token_masks=token_masks.unsqueeze(1),
+            token_masks=token_masks,
         )
 
         logits = logits.view(-1, logits.size(-1))
 
         labels_input_ids = labels_input_ids.reshape(-1)
 
+        class_weights = torch.ones(logits.size(-1)).to(self.device)
+        class_weights[self.llava_model.tokenizer_vocab_size + 1 : self.llava_model.tokenizer_vocab_size + num_pos_tokens + 1] = num_new_tokens / num_pos_tokens / 2
+        class_weights[self.llava_model.tokenizer_vocab_size + num_pos_tokens + 1 :] = num_new_tokens / num_neg_tokens / 2
         loss_fn = nn.CrossEntropyLoss(
             ignore_index=self.llava_model.processor.tokenizer.pad_token_id,
             reduction="none",
+            weight=class_weights,
         )
         # where the labels_input_ids are one of the new tokens, the loss should be multiplied by 2
         loss = loss_fn(logits, labels_input_ids)
 
         weights = torch.ones_like(labels_input_ids) * 0.5
-        weights[labels_input_ids > self.llava_model.tokenizer_vocab_size] = 3
+        weights[labels_input_ids > self.llava_model.tokenizer_vocab_size] = 2
         loss = (loss * weights).mean()
 
         # if loss is nan break
         if torch.isnan(loss):
-            breakpoint()
+            print("NAN LOSS")
+            return None, None
 
         # backward pass
         optimizer.zero_grad()
@@ -534,10 +532,8 @@ class LISA_Model(nn.Module):
         emb_grads = self.llava_model.llava_model.get_input_embeddings().weight.grad
         new_tokens.backward(
             emb_grads[
-                self.llava_model.tokenizer_vocab_size
-                + 1 : self.llava_model.tokenizer_vocab_size
-                + 1
-                + new_tokens.size(0)
+                self.llava_model.tokenizer_vocab_size + 1 : 
+                self.llava_model.tokenizer_vocab_size + num_new_tokens + 1
             ]
         )
 
@@ -591,14 +587,16 @@ class LISA_Model(nn.Module):
                 padding=True,
                 add_special_tokens=False,
             ).to(self.device)
-
+            
             # call generate on the model
             generated_tok = self.llava_model.llava_model.generate(
                 **inputs,
                 num_beams=1,
                 max_new_tokens=self.max_new_tokens,
                 eos_token_id=self.tokenized_end_token,
+                do_sample=False,
             )
+            
             generated = self.llava_model.processor.batch_decode(
                 generated_tok,
                 skip_special_tokens=False,
