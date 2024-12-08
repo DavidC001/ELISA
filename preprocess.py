@@ -51,6 +51,9 @@ class PreprocessPipeline:
 
             sam_masks = self.remove_gt_masks(sam_masks, gt_masks)
 
+            sam_shapes = self.get_shapes_from_masks(sam_masks)
+            gt_shapes = self.get_shapes_from_masks(gt_masks)
+
             gt_embs = [self.ace.get_visual_embedding(img, mask) for mask in gt_masks]
             sam_embs = [self.ace.get_visual_embedding(img, mask) for mask in sam_masks]
 
@@ -58,6 +61,8 @@ class PreprocessPipeline:
                 "img": os.path.basename(img_path),
                 "gt_embs": [emb.cpu().numpy().tolist() for emb in gt_embs],
                 "sam_embs": [emb.cpu().numpy().tolist() for emb in sam_embs],
+                "gt_shapes": gt_shapes,
+                "sam_shapes": sam_shapes,
             }
 
     def create_gt_masks(self, img_path: str) -> list[np.ndarray]:
@@ -95,6 +100,13 @@ class PreprocessPipeline:
     def reshape_image(self, image: np.ndarray, size: int = 1024):
         return cv2.resize(image, (size, size))
 
+    def get_shapes_from_masks(self, masks: list[np.ndarray]):
+        shapes = [
+            cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[0] for mask in masks
+        ]
+
+        return [[[tuple(p[0]) for p in s] for s in shape] for shape in shapes]
+
     def inference_preprocess(self, img_path: str):
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -103,9 +115,11 @@ class PreprocessPipeline:
 
         sam_masks = self.create_sam_masks(img_path)
         sam_embs = [self.ace.get_visual_embedding(img, mask) for mask in sam_masks]
+        sam_shapes = self.get_shapes_from_masks(sam_masks)
 
         return {
             "img": os.path.basename(img_path),
+            "sam_shapes": sam_shapes,
             "sam_embs": [emb.cpu().numpy().tolist() for emb in sam_embs],
         }
 
