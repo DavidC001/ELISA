@@ -292,5 +292,5 @@ def run_experiment(exp_name, exp_config, config, data_loaders):
     # 8. Model Saving
     # ==========================
     os.makedirs("models", exist_ok=True)
-    torch.save(model.state_dict(), f"models/model_{exp_name}.pth")
+    torch.save(model, f"models/model_{exp_name}.pth")
     print(f"Model saved as models/model_{exp_name}.pth")
