@@ -17,7 +17,7 @@ experiments_config = {
         "epochs": 1,
         "optimizer": {
             "adapter_lr": 1e-3,
-            "lora_lr": 1e-5,
+            "lora_lr": 1e-4,
         },
         "model_params": {
             # General Parameters
@@ -34,6 +34,7 @@ experiments_config = {
             "dropout": 0.25,
             # Others
             "seg_pos": "before", # "before" or "after"
+            "text": True,
         },
         "log_interval": 10,  # How often to log to wandb
         "val_every": 1,  # How often to run validation

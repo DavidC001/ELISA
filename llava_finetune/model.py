@@ -311,6 +311,7 @@ class LISA_Model(nn.Module):
         max_new_tokens: int = 100,
         end_turn_token: str = "<end_of_turn>\n",
         seg_pos: str = "before",
+        text: bool = True,
         q4: bool = True,
         q8: bool = False,
         device: str = "cuda",
@@ -323,6 +324,8 @@ class LISA_Model(nn.Module):
             seg_emb_size (int): size of the segment embeddings coming from the segmentation encoder model
             max_new_tokens (int, optional): Maximum number of new tokens to generate. Defaults to 100.
             end_turn_token (str, optional): Token to be added at the end of the generated text. Defaults to "<end_of_turn>\n".
+            seg_pos (str, optional): Position of the segment tokens in the generated text. Defaults to "before".
+            text (bool, optional): Whether to use text as input to the model. Defaults to True.
             q4 (bool, optional): Load the model in 4-bit quantization. Defaults to True.
             q8 (bool, optional): Load the model in 8-bit quantization. Defaults to False.
             device (str, optional): Device to run the model on. Defaults to "cuda"
@@ -332,6 +335,7 @@ class LISA_Model(nn.Module):
         self.seg_emb_size = seg_emb_size
         self.max_new_tokens = max_new_tokens
         self.seg_pos = seg_pos
+        self.text = text
 
         # Initialize the processor
         processor = LlavaProcessor.from_pretrained(model_name)
@@ -422,20 +426,22 @@ class LISA_Model(nn.Module):
 
         # Pass all tokens to the adapter and add the corresponding token lemma to the labels texts
         for i in range(len(pos_mask_embeds)):
-            if self.seg_pos == "before":
-                labels[i] = " "+labels[i]
-            elif self.seg_pos == "after":
-                labels[i] = labels[i]+" "
+            if self.seg_pos == "after" and self.text:
+                labels[i] = labels[i]+" In the image they are "
             for j in range(pos_mask_embeds[i].size(0)):
                 new_tokens.append(pos_mask_embeds[i][j])
                 if self.seg_pos == "before":
-                    labels[i] = f"<SEG_MASK_{free_token}>{labels[i]}"
+                    labels[i] = f"<SEG_MASK_{free_token}>, {labels[i]}" if j < pos_mask_embeds[i].size(0) - 1 else f"<SEG_MASK_{free_token}>. {labels[i]}"
                 elif self.seg_pos == "after":
-                    labels[i] = f"{labels[i]}<SEG_MASK_{free_token}>"
+                    labels[i] = f"{labels[i]}<SEG_MASK_{free_token}>, " if j < pos_mask_embeds[i].size(0) - 1 else f"{labels[i]}<SEG_MASK_{free_token}>."
                 token_masks[
                     i, self.llava_model.tokenizer_vocab_size + free_token
                 ] = 1
                 free_token += 1
+
+            
+            if self.seg_pos == "before" and self.text:
+                labels[i] = "You are talking about "+labels[i]
 
             # apply the chat template to the texts
             input_texts.append(
@@ -494,6 +500,7 @@ class LISA_Model(nn.Module):
         # print(f"\tInput tokens: {inputs['input_ids']}")
         # print(f"\tLabels: {labels_input_ids}")
         # print()
+        breakpoint()
 
         # Forward pass through the model
         logits = self.llava_model(
@@ -519,10 +526,10 @@ class LISA_Model(nn.Module):
         # where the labels_input_ids are one of the new tokens, the loss should be multiplied by 2
         loss = loss_fn(logits, labels_input_ids)
 
-        weights = torch.ones_like(labels_input_ids) * 0.5
-        weights[labels_input_ids > self.llava_model.tokenizer_vocab_size] = 2
-        # penilize the model for not generating the end tokens
-        weights[labels_input_ids == self.tokenized_end_token] = 2
+        weights = torch.ones_like(labels_input_ids)
+        # weights[labels_input_ids > self.llava_model.tokenizer_vocab_size] = 1.5
+        # # penilize the model for not generating the end tokens
+        # weights[labels_input_ids == self.tokenized_end_token] = 1.5
         loss = (loss * weights).mean()
 
         # if loss is nan break
@@ -598,7 +605,7 @@ class LISA_Model(nn.Module):
             # call generate on the model
             generated_tok = self.llava_model.llava_model.generate(
                 **inputs,
-                num_beams=1,
+                num_beams=5,
                 max_new_tokens=self.max_new_tokens,
                 eos_token_id=self.tokenized_end_token,
                 do_sample=False,
