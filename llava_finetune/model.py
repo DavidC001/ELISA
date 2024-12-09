@@ -500,7 +500,6 @@ class LISA_Model(nn.Module):
         # print(f"\tInput tokens: {inputs['input_ids']}")
         # print(f"\tLabels: {labels_input_ids}")
         # print()
-        breakpoint()
 
         # Forward pass through the model
         logits = self.llava_model(
