@@ -255,6 +255,14 @@ def run_experiment(exp_name, exp_config, config, data_loaders):
                 best_f1 = f1_avg
                 tqdm.write(f"New Best F1: {best_f1:.4f}")
                 wandb.log({"best_val_f1": best_f1})
+                # save model
+                os.makedirs("models", exist_ok=True)
+                torch.save(model, f"models/model_{exp_name}.pth")
+
+    # if exists, load best model
+    if best_f1 > 0:
+        model = torch.load(f"models/model_{exp_name}.pth")
+        print(f"Loaded best model with F1: {best_f1:.4f}")
 
     print("Starting Testing")
     (
