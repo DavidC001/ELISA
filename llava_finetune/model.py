@@ -16,7 +16,7 @@ from peft import LoraConfig, get_peft_model
 from PIL import Image
 
 DEBUG_PRINTS = False
-
+NUM_BEAMS = 1
 
 class QueryBlock(nn.Module):
     def __init__(
@@ -604,7 +604,7 @@ class LISA_Model(nn.Module):
             # call generate on the model
             generated_tok = self.llava_model.llava_model.generate(
                 **inputs,
-                num_beams=5,
+                num_beams=NUM_BEAMS,
                 max_new_tokens=self.max_new_tokens,
                 eos_token_id=self.tokenized_end_token,
                 do_sample=False,
