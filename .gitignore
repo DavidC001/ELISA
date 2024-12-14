@@ -164,6 +164,11 @@ cython_debug/
 config.yaml
 config_davide.yaml
 
+.vscode
 checkpoints
 data
 output
+inference
+wandb
+models
+AlphaCLIP

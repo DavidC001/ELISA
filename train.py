@@ -1,43 +1,115 @@
-import torch
 import warnings
+import torch
+import random
+import numpy as np
+
+import wandb
+from configuration import load_yaml_config
+from llava_finetune.functions import run_experiment
+from llava_finetune.utils import get_dataloaders
 
 warnings.filterwarnings("ignore")
-from llava_finetune.utils import get_dataloaders
-from llava_finetune.functions import run_experiment
 
-from configuration import load_yaml_config
+# set seeds for reproducibility (where possible)
+seed = 42
+torch.manual_seed(seed)
+random.seed(seed)
+np.random.seed(seed)
 
-config = load_yaml_config("config.yaml")
+config = load_yaml_config("config_davide.yaml")
+wan_db_token = config.others.wandb_token
+wandb.login(key=wan_db_token)
 
 # ==========================
 # 1. Experiment Configurations
 # ==========================
 experiments_config = {
-    "llava_seg": {
-        "epochs": 1,
+    "Q-adapter": {
+        "epochs": 30,
+        "skip_test_val": False,
         "optimizer": {
             "adapter_lr": 1e-3,
-            "lora_lr": 1e-4,
+            "lora_lr": 3e-4,
+        },
+        "scheduler": {
+            "eta_min": 1e-5,
+        },
+        
+        "preprocess_params": {
+            "model": "alpha-clip",
+            "only_masks": False,
         },
         "model_params": {
-            # General Parameters
-            "end_turn_token": "<end_of_turn>\n",
-            "max_new_tokens": 100,
+            # Model Parameters
+            "lora_rank": 8,
             "q4": True,
             "q8": False,
+            
             # Adapter Parameters
             "hidden_dim": None,
             "expand_factor": 2,
-            "num_linears": 25,
-            "num_heads": [1, 1],
-            "num_queries": [10, 1],
+            "mlp_adapter": False,
+            "num_linears": 10,
+            "num_heads": [1],
+            "num_queries": [5],
+            
+            # Training Parameters
+            "mask_prob": 0, # Probability of masking a token in the input
             "dropout": 0.25,
-            # Others
-            "seg_pos": "before", # "before" or "after"
-            "text": True,
+            "noise_level": 1e-6,
+            "pos_weight": 10, # Weight for positive samples classes
+            "neg_weight": 1, # Weight for negative samples classes
+            "temperature": 0.1, # Temperature for logits scaling during training
+            
+            # Other Parameters
+            "end_turn_token": "<end_of_turn>\n",
+            "seg_pos": "after",  # "before" or "after" the gt answer from the dataset
+            "text": True, # Whether to use text or not (add "in the image the objects are ...")
         },
         "log_interval": 10,  # How often to log to wandb
-        "val_every": 1,  # How often to run validation
+        "val_every": 5,  # How often to run validation
+    },
+    "MLP-adapter": {
+        "epochs": 30,
+        "skip_test_val": False,
+        "optimizer": {
+            "adapter_lr": 1e-3,
+            "lora_lr": 3e-4,
+        },
+        "scheduler": {
+            "eta_min": 1e-5,
+        },
+        
+        "preprocess_params": {
+            "model": "alpha-clip",
+            "only_masks": False,
+        },
+        "model_params": {
+            # Model Parameters
+            "lora_rank": 8,
+            "q4": True,
+            "q8": False,
+            
+            # Adapter Parameters
+            "hidden_dim": None,
+            "expand_factor": 2,
+            "mlp_adapter": True,
+            
+            # Training Parameters
+            "mask_prob": 0, # Probability of masking a token in the input
+            "dropout": 0.25,
+            "noise_level": 1e-6,
+            "pos_weight": 10, # Weight for positive samples classes
+            "neg_weight": 1, # Weight for negative samples classes
+            "temperature": 0.1, # Temperature for logits scaling during training
+            
+            # Other Parameters
+            "end_turn_token": "<end_of_turn>\n",
+            "seg_pos": "after",  # "before" or "after" the gt answer from the dataset
+            "text": True, # Whether to use text or not (add "in the image the objects are ...")
+        },
+        "log_interval": 10,  # How often to log to wandb
+        "val_every": 5,  # How often to run validation
     }
 }
 
@@ -51,10 +123,10 @@ if __name__ == "__main__":
     data_loader, data_val_loader, data_test_loader = get_dataloaders(
         config.dataset.json_path,
         config.dataset.image_dir,
-        5,
-        "data/train-v2.jsonl",
-        "data/val-v2.jsonl",
-        "data/test-v2.jsonl",
+        4,
+        "data/train_final.jsonl",
+        "data/val_final.jsonl",
+        "data/test_final.jsonl",
     )
     print("Datasets Loaded Successfully")
 
