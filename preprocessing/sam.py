@@ -69,7 +69,9 @@ class SegmentationMaskExtractor:
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         self.sam = sam_model_registry[self.config.model](checkpoint_path).to(device)
-        self.mask_generator = SamAutomaticMaskGenerator(self.sam)
+        self.mask_generator = SamAutomaticMaskGenerator(
+            self.sam, pred_iou_thresh=0.88, points_per_side=50
+        )
 
     def __call__(self, path: os.PathLike | list[os.PathLike]):
         return self.extract(path)

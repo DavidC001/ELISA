@@ -65,6 +65,12 @@ class AlphaCLIPConfig:
     def __post_init__(self):
         self.checkpoint_dir = os.path.expanduser(self.checkpoint_dir)
 
+@dataclass
+class OthersConfig:
+    wandb_token: str
+    
+    def __post_init__(self):
+        self.wandb_token = os.path.expanduser(self.wandb_token)
 
 @dataclass
 class ProjectConfig:
@@ -72,6 +78,7 @@ class ProjectConfig:
     dataset: DatasetConfig
     sam: SAMConfig
     alphaclip: AlphaCLIPConfig
+    others: OthersConfig
 
 
 def load_yaml_config(path) -> ProjectConfig:

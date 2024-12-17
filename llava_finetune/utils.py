@@ -12,7 +12,7 @@ import matplotlib.colors as mcolors
 # 1. Dataset Definition
 # ==========================
 class CustomDataset(Dataset):
-    def __init__(self, json_path, image_dir, exp_json_path=None, load_images=False):
+    def __init__(self, json_path, image_dir, exp_json_path=None, load_images=False, top_samples=30):
         """Initializes the CustomDataset class.
 
         Args:
@@ -23,6 +23,7 @@ class CustomDataset(Dataset):
         """
         self.image_dir = image_dir
         self.load_images = load_images
+        self.top_samples = top_samples
         self.data = self.load_data(json_path, image_dir, exp_json_path)
 
     def load_data(self, json_path, image_dir, exp_json_path):
@@ -36,6 +37,9 @@ class CustomDataset(Dataset):
                 answer = sample["outputs"]
                 answers[image] = answer
 
+        # compute the number of positive classes and negative classes
+        gt_classes = 0
+        sam_classes = 0
         with open(json_path, "r") as f:
             for line in f:
                 sample = json.loads(line)
@@ -46,7 +50,10 @@ class CustomDataset(Dataset):
 
                 if (len(sample["gt_embs"]) == 0) or (len(sample["sam_embs"]) == 0):
                     continue
-
+                
+                gt_classes += len(sample["gt_embs"])
+                sam_classes += len(sample["sam_embs"])
+                
                 data.append(
                     {
                         "image": (
@@ -60,12 +67,16 @@ class CustomDataset(Dataset):
                             len(sample["gt_embs"]), -1
                         ),
                         "gt_shapes": sample["gt_shapes"],
-                        "sam_embs": torch.tensor(sample["sam_embs"]).view(
-                            len(sample["sam_embs"]), -1
+                        "sam_embs": torch.tensor(sample["sam_embs"][:self.top_samples]).view(
+                            min(len(sample["sam_embs"]),self.top_samples), -1
                         ),
-                        "sam_shapes": sample["sam_shapes"],
+                        "sam_shapes": sample["sam_shapes"][:self.top_samples],
                     }
                 )
+        
+        print(f"Number of positive classes: {gt_classes}")
+        print(f"Number of negative classes: {sam_classes}")
+        
         return data
 
     def __len__(self):

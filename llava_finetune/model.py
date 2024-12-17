@@ -377,7 +377,7 @@ class LISA_Model(nn.Module):
 
         # Initialize the processor
         processor = LlavaProcessor.from_pretrained(model_name)
-        new_tokens = [f"<SEG_MASK_{i}>" for i in range(1, 1000)]
+        new_tokens = [f" <SEG_MASK_{i}>" for i in range(1, 1000)]
         processor.tokenizer.add_tokens(new_tokens)
 
         # Configuration for quantization
@@ -401,6 +401,7 @@ class LISA_Model(nn.Module):
             target_modules=[
                 "q_proj",
                 "v_proj",
+                "output_proj"
             ],  # Adjust based on the actual module names
             bias="none",
             task_type="CAUSAL_LM",
@@ -451,6 +452,22 @@ class LISA_Model(nn.Module):
         input_texts = []
         free_token = 1
         new_tokens = []
+        
+        seg_pos = self.seg_pos
+        
+        possible_texts = [
+            "The segmentation mask for the object in the image is",
+            "The requested object cab be found in",
+            "You can find the segmentation mask for the object in the image at",
+            "The object is located in",
+            "The object is in",
+            "You can find the object in",
+            "Concering the object location, it is in",
+            "The object is located at",
+            "The object is at",
+            "The object can be found in",
+            "The object is in the image at",
+        ]
 
         num_new_tokens = sum(
             [pos_mask_embeds[i].size(0) for i in range(len(pos_mask_embeds))]
@@ -467,31 +484,55 @@ class LISA_Model(nn.Module):
 
         # Pass all tokens to the adapter and add the corresponding token lemma to the labels texts
         for i in range(len(pos_mask_embeds)):
-            if self.seg_pos == "after" and self.text:
-                labels[i] = labels[i] + " The segmentation mask for the object in the image "+ ("is " if pos_mask_embeds[i].size(0) > 1 else "are ")
-            elif self.seg_pos == "before" and self.text:
+            if self.seg_pos == "randomized":
+                seg_pos = "before" if torch.rand(1) < 0.5 else "after"
+                
+            if seg_pos == "after" and self.text:
+                labels[i] = labels[i] + " "+possible_texts[torch.randint(0, len(possible_texts), (1,)).item()]
+            elif seg_pos == "before" and self.text:
                 labels[i] = ". " + labels[i]
             for j in range(pos_mask_embeds[i].size(0)):
                 new_tokens.append(pos_mask_embeds[i][j])
-                if self.seg_pos == "before":
+                if seg_pos == "before":
                     labels[i] = f" <SEG_MASK_{free_token}>{labels[i]}"
-                elif self.seg_pos == "after":
-                    labels[i] = (
-                        f"{labels[i]}<SEG_MASK_{free_token}> "
-                        if j < pos_mask_embeds[i].size(0) - 1
-                        else f"{labels[i]}and <SEG_MASK_{free_token}>."
-                    )
+                elif seg_pos == "after":
+                    labels[i] = f"{labels[i]} <SEG_MASK_{free_token}>"
                 token_masks[i, self.llava_model.tokenizer_vocab_size + free_token] = 1
                 free_token += 1
 
-            if self.seg_pos == "before" and self.text:
-                labels[i] = "The segmentation mask for the object in the image "+ ("is" if pos_mask_embeds[i].size(0) > 1 else "are") + labels[i]
+            if seg_pos == "before" and self.text:
+                labels[i] =  possible_texts[torch.randint(0, len(possible_texts), (1,)).item()] + labels[i]
+            elif seg_pos == "after" and self.text:
+                labels[i] = labels[i] + "."
 
             # apply the chat template to the texts
+            possibile_output_texts = [
+                "Output the segmentation mask for the object in the image",
+                "Output the mask for the object in the image",
+                "Output the segmentation mask",
+                "Output the mask",
+                "Generate the segmentation mask for the object",
+                "Generate the mask for the object",
+                "Generate the segmentation mask",
+                "Generate the mask",
+                "Provide the segmentation mask for the object",
+                "Provide the mask for the object",
+                "Provide the segmentation mask",
+                "Provide the mask",
+            ]
+            
+            if self.seg_pos == "randomized":
+                seg_pos = "before" if torch.rand(1) < 0.5 else "after"
+                
+            if seg_pos == "after":
+                user_message = f"<image>\n{texts[i]} {possibile_output_texts[torch.randint(0, len(possibile_output_texts), (1,)).item()]}."
+            elif seg_pos == "before":
+                user_message = f"<image>\n{possibile_output_texts[torch.randint(0, len(possibile_output_texts), (1,)).item()]}. {texts[i]}"
+                
             input_texts.append(
                 self.llava_model.processor.tokenizer.apply_chat_template(
                     [
-                        {"role": "user", "content": f"<image>\n{texts[i]} Output the segmentation mask for the object in the image"},
+                        {"role": "user", "content": user_message},
                         {"role": "assistant", "content": labels[i]},
                     ],
                     tokenize=False,
@@ -517,6 +558,7 @@ class LISA_Model(nn.Module):
         new_tokens = torch.stack(new_tokens)
         new_tokens = self.adapter(new_tokens.to(self.device))
 
+        
         # tokenize the texts
         inputs = self.llava_model.processor(
             text=input_texts,
@@ -527,8 +569,12 @@ class LISA_Model(nn.Module):
         ).to(self.device)
         # remove last token from the input text
         inputs["input_ids"] = inputs["input_ids"][:, :-1]
+        
         # drop random tokens and substitute them with the unk token
         mask = torch.rand(inputs["input_ids"].size()) < self.mask_tok_prob
+        # keep image tokens
+        mask[inputs["input_ids"] == self.llava_model.processor.tokenizer.encode("<image>", add_special_tokens=False)[0]] = False
+        # mask the tokens
         inputs["input_ids"][mask] = self.llava_model.processor.tokenizer.unk_token_id
 
         labels_ids = self.llava_model.processor(
@@ -596,7 +642,8 @@ class LISA_Model(nn.Module):
         emb_grads = self.llava_model.llava_model.get_input_embeddings().weight.grad
         new_tokens.backward(
             emb_grads[
-                self.llava_model.tokenizer_vocab_size + 1 : self.llava_model.tokenizer_vocab_size
+                self.llava_model.tokenizer_vocab_size + 1 : 
+                self.llava_model.tokenizer_vocab_size
                 + num_new_tokens
                 + 1
             ]
