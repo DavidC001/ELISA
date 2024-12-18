@@ -33,6 +33,9 @@ class AlphaCLIPDownloader:
         if not os.path.exists(checkpoint_path):
             print("Downloading model...")
             import urllib.request
+            
+            # create download directory if it does not exist
+            os.makedirs(dir, exist_ok=True)
 
             urllib.request.urlretrieve(AlphaCLIPDownloader.models[model], checkpoint_path)
 
