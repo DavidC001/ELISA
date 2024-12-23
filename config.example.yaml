@@ -2,19 +2,57 @@ llava:
   model: "Intel/llava-gemma-2b"
 
 dataset:
-  json_path: "..."
-  image_dir: "..."
-  mask_dir: "..."
+  ReasonSeg:
+    json_path: "..."
+    image_dir: "..."
+    mask_dir: "..."
+  COCO:
+    name: "coco-2017"
+    dataset_zoo_dir: "..."
 
 sam:
   model: "vit_b"
   checkpoint_dir: "..."
   resize: 1024
-  n_masks: 20
+  n_masks: 0
 
 alphaclip:
   model: "ViT-B/16"
   checkpoint_dir: "..."
 
+train:
+  experiments:
+    TEST_REDUCT_NEG:
+      epochs: 50
+      skip_test_val: false
+      optimizer:
+        adapter_lr: 1.0e-3
+        lora_lr: 1.0e-6
+      scheduler:
+        eta_min: 1.0e-4
+      model_params:
+        lora_rank: 16
+        q4: true
+        q8: false
+        mask_prob: 0.2
+        dropout: 0.2
+        pos_weight: 2
+        neg_weight: 1
+        temperature: 0.1
+        end_turn_token: "<end_of_turn>\n"
+        seg_pos: "randomized"
+        text: true
+        adapter_params:
+          expand_factor: 2
+          mlp_adapter: true
+          noise_level: 1.0e-6
+      log_interval: 10
+      val_every: 50
+      dataset:
+        batch_size: 4
+        train_jsonl: "..."
+        val_jsonl: "..."
+        test_jsonl: "..."
+
 others:
-  wandb_token: "TOKEN"
+  wandb_token: "..."

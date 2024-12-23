@@ -83,8 +83,8 @@ class SegAdapter(nn.Module):
         hidden_dim: int = None,
         expand_factor: int = 2,
         num_linears: int = 25,
-        num_heads: int = [1],
-        num_queries: int = [10],
+        num_heads: list[int] = [1],
+        num_queries: list[int] = [10],
         dropout: float = 0.25,
         noise_level: float = 1e-4,
         mlp_adapter: bool = False,
@@ -99,8 +99,8 @@ class SegAdapter(nn.Module):
             hidden_dim (int): Dimension of the hidden layers in the adapter module (if None, hidden_dim = llava_embedding_dim)
             expand_factor (int): Factor to expand the hidden dimension in the FFN
             dropout (float): Dropout rate to apply in the adapter module
-            num_heads (int): Number of heads to use in the multi-head attention layer
-            num_queries (int): Number of queries to use in the multi-head attention layer
+            num_heads (list[int]): Number of heads to use in the multi-head attention layer
+            num_queries (list[int]): Number of queries to use in the multi-head attention layer
             blocks (int): Number of blocks to use in the adapter module
         """
         super().__init__()
@@ -108,7 +108,7 @@ class SegAdapter(nn.Module):
         if hidden_dim is None:
             hidden_dim = llava_embedding_dim
 
-        self.mean_train_masks = torch.load("models/train_embs_mean.pt")
+        self.mean_train_masks = torch.load("llava_finetune/train_embs_mean.pt")
         self.input_norm = nn.LayerNorm(input_segment_dim)
         
         self.mlp_adapter = mlp_adapter
@@ -337,18 +337,18 @@ class LISA_Model(nn.Module):
         model_name: str,
         seg_emb_size: int,
         lora_rank: int = 16,
-        temperature: float = 0.1,
-        mask_prob: float = 0.1,
+        temperature: float = 1,
+        mask_prob: float = 0,
         end_turn_token: str = "<end_of_turn>\n",
         seg_pos: str = "before",
         text: bool = True,
-        pos_weight: int = 2,
+        pos_weight: int = 1,
         neg_weight: int = 1,
         q4: bool = True,
         q8: bool = False,
         dropout: float = 0.1,
         device: str = "cuda",
-        **adapter_kwargs,
+        adapter_args: dict = {},
     ):
         """Initialize the LISA model
 
@@ -356,12 +356,12 @@ class LISA_Model(nn.Module):
             model_name (str): name of the llava model to load from huggingface
             seg_emb_size (int): size of the segment embeddings coming from the segmentation encoder model
             lora_rank (int, optional): Rank of the LoRA model. Defaults to 16.
-            temperature (float, optional): Temperature to apply in the training. Defaults to 0.1.
-            mask_prob (float, optional): Probability of masking a token in the input text. Defaults to 0.1.
+            temperature (float, optional): Temperature to apply in the training. Defaults to 1.
+            mask_prob (float, optional): Probability of masking a token in the input text. Defaults to 0.
             end_turn_token (str, optional): Token to be added at the end of the generated text. Defaults to "<end_of_turn>\n".
             seg_pos (str, optional): Position of the segment tokens in the generated text. Defaults to "before".
             text (bool, optional): Whether to use text as input to the model. Defaults to True.
-            pos_weight (int, optional): Weight to assign to the positive mask tokens. Defaults to 2.
+            pos_weight (int, optional): Weight to assign to the positive mask tokens. Defaults to 1.
             neg_weight (int, optional): Weight to assign to the negative mask tokens. Defaults to 1.
             q4 (bool, optional): Load the model in 4-bit quantization. Defaults to True.
             q8 (bool, optional): Load the model in 8-bit quantization. Defaults to False.
@@ -409,7 +409,7 @@ class LISA_Model(nn.Module):
         model = get_peft_model(model, lora_config)
 
         self.adapter = SegAdapter(
-            seg_emb_size, model.get_input_embeddings().weight.size(1), dropout=dropout, **adapter_kwargs
+            seg_emb_size, model.get_input_embeddings().weight.size(1), dropout=dropout, **adapter_args
         )
 
         self.llava_model = DynamicVocabLlavaModel(model, processor)

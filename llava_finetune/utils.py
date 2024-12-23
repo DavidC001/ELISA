@@ -101,7 +101,6 @@ class CustomDataset(Dataset):
             "sam_shapes": sample["sam_shapes"],
         }
 
-
 def collate_fn(batch):
     new_batch = {}
     for key in batch[0]:
