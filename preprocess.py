@@ -14,9 +14,6 @@ from configuration import ProjectConfig, dataclass, load_yaml_config
 from preprocessing.alphaclip import AlphaCLIPEncoder
 from preprocessing.sam import SegmentationMaskExtractor
 
-import fiftyone.zoo as foz
-import fiftyone as fo
-
 
 @dataclass
 class InferenceSample:
@@ -46,10 +43,9 @@ class PreprocessPipeline:
         self.COCO_dataset = config.dataset.COCO
         self.ReasonSeg_dataset = config.dataset.ReasonSeg
 
-    def run_all(self, mask_only: bool = False, dataset_name: str = "ReasonSeg",) -> list[dict]:
+    def run_all(self, mask_only: bool = False, dataset_name: str = "ReasonSeg") -> list[dict]:
         """
-        Runs the pipeline on either the ReasonSeg dataset (images and JSONs in a folder)
-        or the COCO dataset (loaded via FiftyOne).
+        Runs the pipeline on either the ReasonSeg dataset or the COCO dataset.
         """
         res = []
 
@@ -61,108 +57,165 @@ class PreprocessPipeline:
                     print(f"Error in {image}: {e}")
 
         else:
-            # Load the COCO dataset via FiftyOne
-            ds = foz.load_zoo_dataset(
+            # COCO dataset
+            json_labels_path = os.path.join(
+                self.COCO_dataset.dataset_zoo_dir,
                 self.COCO_dataset.name,
-                split="train",
-                label_types=["segmentations"],
-                max_samples=self.COCO_dataset.num_samples,
-                shuffle=True,
-                seed=42,
+                "train",
+                "labels.json"
             )
+            with open(json_labels_path, "r") as f:
+                labels = json.load(f)
 
-            for sample in tqdm(ds):
+            # Make a dict to quickly look up image info by ID
+            images_dict = {img["id"]: img for img in labels["images"]}
+
+            # Group annotations by image_id
+            ann_by_img_id = {}
+            for ann in labels["annotations"]:
+                img_id = ann["image_id"]
+                ann_by_img_id.setdefault(img_id, []).append(ann)
+
+            # Process each image
+            for img_id, img_info in tqdm(images_dict.items()):
                 try:
-                    res.append(self.run_COCO(sample, mask_only))
+                    image_path = os.path.join(
+                        self.COCO_dataset.dataset_zoo_dir,
+                        self.COCO_dataset.name,
+                        "train",
+                        "data",
+                        img_info["file_name"]
+                    )
+
+                    # The annotations for this image
+                    annotations = ann_by_img_id.get(img_id, [])
+
+                    out = self.run_COCO(image_path, img_info, annotations, mask_only)
+                    if out is not None:
+                        res.append(out)
                 except Exception as e:
-                    print(f"Error in {sample.filepath}: {e}")
+                    print(f"Error processing {img_info['file_name']}: {e}")
 
         return res
 
-    def run_COCO(self, sample: fo.Sample, mask_only: bool) -> dict:
+
+    def run_COCO(self, image_path: str, img_info: dict, annotations: list[dict], mask_only: bool) -> dict:
         """
-        Run the preprocessing pipeline on a COCO sample (loaded via FiftyOne).
+        Run the preprocessing pipeline on a COCO sample (bounding-box version).
 
         Args:
-            sample (fo.Sample): FiftyOne sample with segmentations.
+            image_path (str): Path to the image file.
+            img_info (dict): The metadata from 'images' (contains width, height, etc.).
+            annotations (list): The annotation dicts for this image.
             mask_only (bool): Whether to multiply the image by the mask or not.
 
         Returns:
-            dict: Dictionary containing the same keys as ReasonSeg output:
-                  {
-                      "img": <image-file-name>,
-                      "gt_embs": [...],
-                      "sam_embs": [...],
-                      "gt_shapes": [...],
-                      "sam_shapes": [...]
-                  }
+            dict with keys:
+                "img": <filename>,
+                "gt_embs": [...],
+                "sam_embs": [...],
+                "gt_shapes": [...],
+                "sam_shapes": [...]
         """
-        # (1) Load the image in CV2 and convert
-        img_path = sample.filepath
-        img = cv2.imread(img_path)
-        if img is None:
-            raise ValueError(f"Cannot read image at {img_path}")
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        # (2) Collect GT masks from the sample's segmentation field
+        if not os.path.exists(image_path):
+            print(f"Image file not found: {image_path}")
+            return None
+
+        # Attempt to load the image size from 'img_info'
+        w = img_info.get("width")
+        h = img_info.get("height")
+
+        # If not present, fallback to reading the image
+        if w is None or h is None:
+            try:
+                pil_img_for_size = Image.open(image_path)
+                w, h = pil_img_for_size.size
+            except:
+                print(f"Could not open image: {image_path}")
+                return None
+
+        # ------------------------------------------------------------------
+        # 1) Create GT masks from bounding boxes
+        # ------------------------------------------------------------------
         gt_masks = []
-        
-        image_width = sample.metadata.width
-        image_height = sample.metadata.height
-        
-        if sample.ground_truth is not None:
-            for detection in sample.ground_truth.detections:
-                if detection.mask is not None:
-                    # Extract bounding box coordinates
-                    bbox = detection.bounding_box  # [top-left-x, top-left-y, width, height]
-                    x1 = round(bbox[0] * image_width)
-                    y1 = round(bbox[1] * image_height)
-                    x2 = round((bbox[0] + bbox[2]) * image_width)
-                    y2 = round((bbox[1] + bbox[3]) * image_height)
-                    
-                    mask = detection.mask 
-                    # reshape the mask to the bounding box size if the shape does not match
-                    if mask.shape[0] != y2 - y1 or mask.shape[1] != x2 - x1:
-                        mask = torch.tensor(mask)
-                        mask = T.Resize((y2 - y1, x2 - x1))(mask.unsqueeze(0).unsqueeze(0))
-                        mask = mask.squeeze(0).squeeze(0).numpy()
-                    
-                    
-                    full_mask = np.zeros((image_height, image_width), dtype=np.uint8)
-                    full_mask[y1:y2, x1:x2] = mask * 255
-                    
-                    gt_masks.append(full_mask)
+        for ann in annotations:
+            # Skip if iscrowd=1 or if no bbox
+            if ann.get("iscrowd", 0) == 1:
+                print("Skipping iscrowd=1")
+                continue
 
-        # (3) Generate the SAM masks for this image
-        sam_masks = self.create_sam_masks(img_path)
+            bbox = ann.get("bbox", None)
+            if not bbox or len(bbox) != 4:
+                print("Skipping invalid bbox")
+                continue  # skip any weird annotation
 
-        # (4) Reshape images and masks to a unified size (e.g., 1024x1024)
-        img = self.reshape_image(img)
+            # bbox format in COCO is [x, y, width, height]
+            x_min, y_min, box_w, box_h = bbox
+            x_max = x_min + box_w
+            y_max = y_min + box_h
+
+            # Ensure valid coords
+            x_min = max(0, x_min)
+            y_min = max(0, y_min)
+            x_max = min(w, x_max)
+            y_max = min(h, y_max)
+
+            # Create a new mask with 1s inside the bounding box
+            mask_pil = Image.new("L", (w, h), 0)
+            draw = ImageDraw.Draw(mask_pil)
+            draw.rectangle([x_min, y_min, x_max, y_max], fill=255)
+            gt_masks.append(np.array(mask_pil))
+
+        # ------------------------------------------------------------------
+        # 2) Create SAM masks
+        # ------------------------------------------------------------------
+        sam_masks = self.create_sam_masks(image_path)
+
+        # ------------------------------------------------------------------
+        # 3) Read image, reshape to 1024 x 1024
+        # ------------------------------------------------------------------
+        img = cv2.imread(image_path)
+        if img is None:
+            print(f"Failed to read image with cv2: {image_path}")
+            return None
+
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = self.reshape_image(img)  # -> 1024 x 1024
         img_pil = Image.fromarray(img)
 
+        # ------------------------------------------------------------------
+        # 4) Reshape all masks to 1024 x 1024
+        # ------------------------------------------------------------------
         gt_masks = [self.reshape_image(m) for m in gt_masks]
         sam_masks = [self.reshape_image(m) for m in sam_masks]
-        
 
-        # (5) Remove any SAM masks overlapping too much with GT
+        # ------------------------------------------------------------------
+        # 5) Remove SAM masks that significantly overlap with GT
+        # ------------------------------------------------------------------
         sam_masks = self.remove_gt_masks(sam_masks, gt_masks)
 
-        # (6) Extract shapes (contours) from the masks
+        # ------------------------------------------------------------------
+        # 6) Get shapes from the final masks
+        # ------------------------------------------------------------------
         gt_shapes = self.get_shapes_from_masks(gt_masks)
         sam_shapes = self.get_shapes_from_masks(sam_masks)
 
-        # (7) Compute embeddings
-        gt_embs = [self.ace.get_visual_embedding(img_pil, mask, mask_only) for mask in gt_masks]
-        sam_embs = [self.ace.get_visual_embedding(img_pil, mask, mask_only) for mask in sam_masks]
+        # ------------------------------------------------------------------
+        # 7) Compute embeddings
+        # ------------------------------------------------------------------
+        with torch.no_grad():
+            gt_embs = [self.ace.get_visual_embedding(img_pil, mask, mask_only) for mask in gt_masks]
+            sam_embs = [self.ace.get_visual_embedding(img_pil, mask, mask_only) for mask in sam_masks]
 
-        # (8) Package results
         return {
-            "img": os.path.basename(img_path),
+            "img": os.path.basename(image_path),
             "gt_embs": [emb.cpu().numpy().tolist() for emb in gt_embs],
             "sam_embs": [emb.cpu().numpy().tolist() for emb in sam_embs],
             "gt_shapes": gt_shapes,
             "sam_shapes": sam_shapes,
         }
+
+    
 
     def run_ReasonSeg(self, img_path: str, mask_only: bool) -> dict:
         """
@@ -298,29 +351,28 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------
     # 1. Process ReasonSeg dataset
     # ------------------------------------------------------------------
-    # base_image_dir = config.dataset.ReasonSeg.image_dir
-    # dirs = ["train", "val", "test"]
+    base_image_dir = config.dataset.ReasonSeg.image_dir
+    dirs = ["train", "val", "test"]
 
-    # # create the data directory if it doesn't exist
-    # os.makedirs("data", exist_ok=True)
+    # create the data directory if it doesn't exist
+    os.makedirs("data", exist_ok=True)
 
-    # for d in dirs:
-    #     print(f"Processing ReasonSeg {d}...")
-    #     config.dataset.ReasonSeg.image_dir = os.path.join(base_image_dir, d)
-    #     pipeline = PreprocessPipeline(config)
+    for d in dirs:
+        print(f"Processing ReasonSeg {d}...")
+        config.dataset.ReasonSeg.image_dir = os.path.join(base_image_dir, d)
+        pipeline = PreprocessPipeline(config)
 
-    #     res = pipeline.run_all(mask_only=False, dataset_name="ReasonSeg")
-    #     out_file = f"data/{os.path.basename(config.dataset.ReasonSeg.image_dir)}_ReasonSeg.jsonl"
+        res = pipeline.run_all(mask_only=False, dataset_name="ReasonSeg")
+        out_file = f"data/{os.path.basename(config.dataset.ReasonSeg.image_dir)}_ReasonSeg.jsonl"
 
-    #     with open(out_file, "w") as f:
-    #         for r in res:
-    #             f.write(json.dumps(r, default=default) + "\n")
+        with open(out_file, "w") as f:
+            for r in res:
+                f.write(json.dumps(r, default=default) + "\n")
 
     # ------------------------------------------------------------------
     # 2. Process COCO dataset
     # ------------------------------------------------------------------
     print("Processing COCO dataset...")
-    fo.config.dataset_zoo_dir = config.dataset.COCO.dataset_zoo_dir
 
     pipeline = PreprocessPipeline(config)
     coco_res = pipeline.run_all(mask_only=False, dataset_name="COCO")
