@@ -183,6 +183,7 @@ class COCODataset(Dataset):
         
         return {
             "image": image,
+            "image_path": os.path.join(self.image_dir, sample["image"]) if not self.load_images else None,
             "queries": query,
             "answer": answer,
             "gt_embs": sample["gt_embs"],
