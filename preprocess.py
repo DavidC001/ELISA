@@ -5,8 +5,6 @@ import os
 import cv2
 import numpy as np
 import torch
-import torchvision.transforms as T
-import math
 from PIL import Image, ImageDraw
 from tqdm import tqdm
 
@@ -42,6 +40,9 @@ class PreprocessPipeline:
         self.ace = AlphaCLIPEncoder(config.alphaclip)
         self.COCO_dataset = config.dataset.COCO
         self.ReasonSeg_dataset = config.dataset.ReasonSeg
+        
+        # We'll store the COCO categories here once we load them.
+        self.coco_cat_map = {}
 
     def run_all(self, mask_only: bool = False, dataset_name: str = "ReasonSeg") -> list[dict]:
         """
@@ -67,6 +68,12 @@ class PreprocessPipeline:
             with open(json_labels_path, "r") as f:
                 labels = json.load(f)
 
+            # Build a category-id -> category-name map
+            self.coco_cat_map = {
+                cat["id"]: cat["name"]
+                for cat in labels["categories"]
+            }
+
             # Make a dict to quickly look up image info by ID
             images_dict = {img["id"]: img for img in labels["images"]}
 
@@ -91,31 +98,28 @@ class PreprocessPipeline:
                     annotations = ann_by_img_id.get(img_id, [])
 
                     out = self.run_COCO(image_path, img_info, annotations, mask_only)
+                    
                     if out is not None:
-                        res.append(out)
+                        for i in range(len(out["gt_embs"])):
+                            res.append({
+                                "img": out["img"],
+                                "gt_embs": [out["gt_embs"][i]],
+                                "sam_embs": out["sam_embs"],
+                                "gt_shapes": [out["gt_shapes"][i]],
+                                "sam_shapes": out["sam_shapes"],
+                                "gt_labels": [out["gt_labels"][i]],
+                            })
                 except Exception as e:
                     print(f"Error processing {img_info['file_name']}: {e}")
 
         return res
 
-
     def run_COCO(self, image_path: str, img_info: dict, annotations: list[dict], mask_only: bool) -> dict:
         """
-        Run the preprocessing pipeline on a COCO sample (bounding-box version).
-
-        Args:
-            image_path (str): Path to the image file.
-            img_info (dict): The metadata from 'images' (contains width, height, etc.).
-            annotations (list): The annotation dicts for this image.
-            mask_only (bool): Whether to multiply the image by the mask or not.
-
-        Returns:
-            dict with keys:
-                "img": <filename>,
-                "gt_embs": [...],
-                "sam_embs": [...],
-                "gt_shapes": [...],
-                "sam_shapes": [...]
+        Run the preprocessing pipeline on a COCO sample, using polygon-based segmentations.
+        
+        We'll create GT masks from the 'segmentation' polygons.
+        We'll also store the category name for each mask, so we can build text prompts later.
         """
         if not os.path.exists(image_path):
             print(f"Image file not found: {image_path}")
@@ -135,36 +139,39 @@ class PreprocessPipeline:
                 return None
 
         # ------------------------------------------------------------------
-        # 1) Create GT masks from bounding boxes
+        # 1) Create GT masks from polygon segmentations
         # ------------------------------------------------------------------
         gt_masks = []
+        gt_labels = []  # keep track of category names
         for ann in annotations:
-            # Skip if iscrowd=1 or if no bbox
             if ann.get("iscrowd", 0) == 1:
-                print("Skipping iscrowd=1")
+                # skip crowd annotations
                 continue
 
-            bbox = ann.get("bbox", None)
-            if not bbox or len(bbox) != 4:
-                print("Skipping invalid bbox")
-                continue  # skip any weird annotation
+            segm = ann.get("segmentation", None)
+            if not segm:
+                # skip empty segmentation
+                continue
 
-            # bbox format in COCO is [x, y, width, height]
-            x_min, y_min, box_w, box_h = bbox
-            x_max = x_min + box_w
-            y_max = y_min + box_h
-
-            # Ensure valid coords
-            x_min = max(0, x_min)
-            y_min = max(0, y_min)
-            x_max = min(w, x_max)
-            y_max = min(h, y_max)
-
-            # Create a new mask with 1s inside the bounding box
+            # Create a new empty PIL mask
             mask_pil = Image.new("L", (w, h), 0)
             draw = ImageDraw.Draw(mask_pil)
-            draw.rectangle([x_min, y_min, x_max, y_max], fill=255)
+
+            # In COCO, 'segmentation' can be multiple polygons, each a list [x1,y1, x2,y2, ...]
+            if isinstance(segm, list):
+                for polygon in segm:
+                    if len(polygon) < 6:  # need at least 3 points
+                        continue
+                    xy_points = [(polygon[i], polygon[i+1]) for i in range(0, len(polygon), 2)]
+                    draw.polygon(xy_points, fill=255)
+            
+            # Convert that mask to NumPy
             gt_masks.append(np.array(mask_pil))
+
+            # Also store the category name
+            cat_id = ann["category_id"]
+            cat_name = self.coco_cat_map.get(cat_id, "unknown")
+            gt_labels.append(cat_name)
 
         # ------------------------------------------------------------------
         # 2) Create SAM masks
@@ -213,45 +220,38 @@ class PreprocessPipeline:
             "sam_embs": [emb.cpu().numpy().tolist() for emb in sam_embs],
             "gt_shapes": gt_shapes,
             "sam_shapes": sam_shapes,
+            "gt_labels": gt_labels,  # store array of category names
         }
-
-    
 
     def run_ReasonSeg(self, img_path: str, mask_only: bool) -> dict:
         """
         Run the preprocessing pipeline on a ReasonSeg image.
-
-        Args:
-            img_path (str): Path to the image to preprocess.
-            mask_only (bool): Whether to multiply the image by the mask or not.
-
-        Returns:
-            dict: Dictionary in the same format used by `run_COCO`.
+        (No changes from your original approach.)
         """
         with torch.no_grad():
-            # create GT masks from the JSON annotation next to the image
+            # Create GT masks from the JSON annotation next to the image
             gt_masks = self.create_gt_masks(img_path)
-            # create SAM masks
+            # Create SAM masks
             sam_masks = self.create_sam_masks(img_path)
 
-            # read and reshape the image
+            # Read and reshape the image
             img = cv2.imread(img_path)
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             img = self.reshape_image(img)
             img_pil = Image.fromarray(img)
 
-            # resize masks
+            # Resize masks
             gt_masks = [self.reshape_image(mask) for mask in gt_masks]
             sam_masks = [self.reshape_image(mask) for mask in sam_masks]
 
-            # remove overlapping SAM masks
+            # Remove overlapping SAM masks
             sam_masks = self.remove_gt_masks(sam_masks, gt_masks)
 
-            # shapes
+            # Shapes
             gt_shapes = self.get_shapes_from_masks(gt_masks)
             sam_shapes = self.get_shapes_from_masks(sam_masks)
 
-            # embeddings
+            # Embeddings
             gt_embs = [self.ace.get_visual_embedding(img_pil, mask, mask_only) for mask in gt_masks]
             sam_embs = [self.ace.get_visual_embedding(img_pil, mask, mask_only) for mask in sam_masks]
 
@@ -264,15 +264,19 @@ class PreprocessPipeline:
             }
 
     def create_gt_masks(self, img_path: str) -> list[np.ndarray]:
-        """Loads the JSON annotation next to the image and creates target masks."""
+        """
+        Loads the JSON annotation next to the image and creates target masks.
+        (Used by ReasonSeg only.)
+        """
         size = Image.open(img_path).size
         mask_file = img_path.replace(".jpg", ".json")
         if not os.path.exists(mask_file):
-            return []  # or raise an exception if you want
+            return []
 
         with open(mask_file, "r") as f:
             data = json.load(f)
 
+        # ReasonSeg label "target" -> polygon points
         gt_shapes = [s for s in data["shapes"] if s["label"] == "target"]
         gt_masks = []
         for shape in gt_shapes:
@@ -286,21 +290,27 @@ class PreprocessPipeline:
         return gt_masks
 
     def remove_gt_masks(self, sam_masks, gt_masks):
-        """Remove SAM masks that overlap with any GT mask by IOU > 0.95."""
+        """
+        Remove any SAM masks that overlap with any GT mask by IOU > 0.95.
+        """
         return [
             mask for mask in sam_masks
             if not any(iou(mask, gt_mask) > 0.95 for gt_mask in gt_masks)
         ]
 
     def create_sam_masks(self, img_path: str) -> list[np.ndarray]:
-        """Create SAM masks (as binary arrays) for the image at `img_path`."""
+        """
+        Create SAM masks (binary arrays) for the image at `img_path`.
+        """
         res = self.sme.segment_path(img_path)
         # Convert to [0..255], as the code later expects an 8-bit mask
         sam_masks = [(mask["segmentation"].astype(np.uint8) * 255) for mask in res]
         return sam_masks
 
     def reshape_image(self, image: np.ndarray, size: int = 1024) -> np.ndarray:
-        """Resize the image or mask to `size x size`."""
+        """
+        Resize the image or mask to `size x size`.
+        """
         return cv2.resize(image, (size, size))
 
     def get_shapes_from_masks(self, masks: list[np.ndarray]):
@@ -312,8 +322,11 @@ class PreprocessPipeline:
             cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)[0] 
             for mask in masks
         ]
-        # Convert each contour into a list of (x, y) tuples
-        return [[[tuple(p[0]) for p in contour] for contour in shape] for shape in shapes]
+        # Convert each contour to a list of (x, y) tuples
+        return [
+            [[tuple(p[0]) for p in contour] for contour in shape]
+            for shape in shapes
+        ]
 
     def inference_preprocess(self, img_path: str, mask_only: bool) -> dict:
         """
@@ -336,6 +349,9 @@ class PreprocessPipeline:
 
 
 def default(obj):
+    """
+    Helper for JSON serialization of NumPy arrays.
+    """
     if type(obj).__module__ == np.__name__:
         if isinstance(obj, np.ndarray):
             return obj.tolist()
@@ -349,35 +365,35 @@ if __name__ == "__main__":
     config = load_yaml_config("config.yaml")
 
     # ------------------------------------------------------------------
-    # 1. Process ReasonSeg dataset
+    # Example: Process ReasonSeg dataset
     # ------------------------------------------------------------------
+    print("Processing ReasonSeg dataset...")
     base_image_dir = config.dataset.ReasonSeg.image_dir
-    dirs = ["train", "val", "test"]
+    splits = ["train", "val", "test"]
 
-    # create the data directory if it doesn't exist
-    os.makedirs("data", exist_ok=True)
-
-    for d in dirs:
-        print(f"Processing ReasonSeg {d}...")
-        config.dataset.ReasonSeg.image_dir = os.path.join(base_image_dir, d)
+    for split in splits:
+        print(f"Split: {split}")
+        config.dataset.ReasonSeg.image_dir = os.path.join(base_image_dir, split)
         pipeline = PreprocessPipeline(config)
 
-        res = pipeline.run_all(mask_only=False, dataset_name="ReasonSeg")
-        out_file = f"data/{os.path.basename(config.dataset.ReasonSeg.image_dir)}_ReasonSeg.jsonl"
+        reasonseg_res = pipeline.run_all(mask_only=False, dataset_name="ReasonSeg")
 
+        # Save results (e.g., JSONL)
+        out_dir = "data"
+        os.makedirs(out_dir, exist_ok=True)
+        out_file = f"{out_dir}/ReasonSeg_{split}.jsonl"
         with open(out_file, "w") as f:
-            for r in res:
+            for r in reasonseg_res:
                 f.write(json.dumps(r, default=default) + "\n")
 
     # ------------------------------------------------------------------
-    # 2. Process COCO dataset
+    # Example: Process COCO dataset
     # ------------------------------------------------------------------
-    print("Processing COCO dataset...")
-
+    print("\nProcessing COCO dataset...")
     pipeline = PreprocessPipeline(config)
     coco_res = pipeline.run_all(mask_only=False, dataset_name="COCO")
 
-    # Save to JSON lines
+    # Save results
     with open("data/COCO_train.jsonl", "w") as f:
         for r in coco_res:
             f.write(json.dumps(r, default=default) + "\n")
