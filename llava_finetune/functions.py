@@ -7,6 +7,16 @@ from tqdm.auto import tqdm
 import os
 import wandb
 from bitsandbytes.optim import AdamW8bit
+from llava_finetune.utils import get_dataloaders
+from configuration import *
+
+def save_state_dict(model, path):
+    # Get state dict and ensure it's on CPU
+    state_dict = model.state_dict()
+    # Remove quantization-specific keys
+    cleaned_state = {k: v for k, v in state_dict.items() 
+                    if not any(x in k for x in ['.absmax', '.quant_map', '.quant_state'])}
+    torch.save(cleaned_state, path)
 
 # ==========================
 # 1. Train step
@@ -161,15 +171,14 @@ def val_step(model, data_val_loader, epoch):
 # ==========================
 # 3. Run Experiment Function
 # ==========================
-def run_experiment(exp_name, exp_config, config, data_loaders):
+def run_experiment(exp_name: str, exp_config: ExperimentConfig, config: ProjectConfig):
     """
     Executes the training, validation, and testing pipeline for a given experiment.
 
     Args:
         exp_name (str): Name of the experiment.
-        exp_config (dict): Configuration dictionary for the experiment.
-        config (object): Global configuration object loaded from YAML.
-        data_loaders (tuple): Tuple containing training, validation, and test DataLoaders.
+        exp_config (ExperimentConfig): Configuration dictionary for the experiment.
+        config (ProjectConfig): Global configuration object loaded from YAML.
     """
     print(
         f"========================\nRunning Experiment: {exp_name}\n========================"
@@ -180,57 +189,32 @@ def run_experiment(exp_name, exp_config, config, data_loaders):
     initialize_wandb(exp_name, exp_config)
 
     # Unpack data loaders
-    data_loader, data_val_loader, data_test_loader = data_loaders
+    data_loader, data_val_loader, data_test_loader = get_dataloaders(exp_config.dataset, config.dataset)
+
+    # recursively convert to dict the model_params
+    model_params = deepcopy(exp_config.model_params.__dict__)
+    for k, v in model_params.items():
+        if hasattr(v, "__dict__"):
+            model_params[k] = v.__dict__
 
     # Load model with experiment-specific parameters
     print("Loading Model")
     model = LISA_Model(
         model_name=config.llava.model,
         seg_emb_size=data_loader.dataset[0]["gt_embs"].shape[1],
-        **exp_config.get("model_params", {}),
+        **model_params,
     )
     model.to("cuda")
     # save model params in json file
     with open(f"models/{exp_name}.json", "w") as f:
-        json.dump({"model_name": config.llava.model, "seg_emb_size": data_loader.dataset[0]["gt_embs"].shape[1], **exp_config.get("model_params", {})}, f)
+        json.dump({"model_name": config.llava.model, "seg_emb_size": data_loader.dataset[0]["gt_embs"].shape[1], **model_params}, f)
     # save preprocess params in json file
     with open(f"models/preprocess_{exp_name}.json", "w") as f:
-        json.dump(exp_config.get("preprocess_params", {}), f)
-    
-    def verify_models_equality(model1, model2):
-        # 1. Compare parameters
-        for (name1, p1), (name2, p2) in zip(model1.named_parameters(), model2.named_parameters()):
-            if name1 != name2:
-                print(f"Parameter name mismatch: {name1} vs {name2}")
-                return False
-            if not torch.equal(p1.data, p2.data):
-                print(f"Parameter value mismatch in {name1}")
-                print(f"Max difference: {(p1.data - p2.data).abs().max()}")
-                return False
-        
-        # 2. test the model outputs using the same input
-        out = val_step(model1, data_val_loader, 0)
-        out2 = val_step(model2, data_val_loader, 0)
-        
-        for i, (o1, o2) in enumerate(zip(out, out2)):
-            if o1 > o2 + 1e-6 or o1 < o2 - 1e-6:
-                print(f"Output mismatch in {i}")
-                print(f"Values: {o1} vs {o2}")
-                return False
-        
-        return True
-
-    def save_state_dict(model, path):
-        # Get state dict and ensure it's on CPU
-        state_dict = model.state_dict()
-        # Remove quantization-specific keys
-        cleaned_state = {k: v for k, v in state_dict.items() 
-                        if not any(x in k for x in ['.absmax', '.quant_map', '.quant_state'])}
-        torch.save(cleaned_state, path)
+        json.dump(exp_config.preprocess.__dict__, f)
 
     # Set up optimizer with experiment-specific learning rates
-    adapter_lr = exp_config["optimizer"]["adapter_lr"]
-    lora_lr = exp_config["optimizer"]["lora_lr"]
+    adapter_lr = exp_config.optimizer.adapter_lr
+    lora_lr = exp_config.optimizer.lora_lr
 
     adapter_params = [p for p in model.adapter.parameters()]
     lora_params = [
@@ -244,15 +228,15 @@ def run_experiment(exp_name, exp_config, config, data_loaders):
         ]
     )
     
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=exp_config["epochs"], eta_min=exp_config["scheduler"]["eta_min"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=exp_config.epochs, eta_min=exp_config.scheduler.eta_min)
 
     best_f1 = 0
     print("Starting Training")
 
-    EPOCHS = exp_config["epochs"]
-    SKIP_VAL_TEST = exp_config.get("skip_test_val", False)
-    log_interval = exp_config.get("log_interval", 10)
-    val_every = exp_config.get("val_every", 10)
+    EPOCHS = exp_config.epochs
+    SKIP_VAL_TEST = exp_config.skip_test_val
+    log_interval = exp_config.log_interval
+    val_every = exp_config.val_every
 
     for epoch in tqdm(range(EPOCHS)):
         avg_loss = train_step(

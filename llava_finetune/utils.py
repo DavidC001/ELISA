@@ -4,6 +4,7 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 from torch.utils.data import Dataset, DataLoader
 import wandb
+from configuration import TrainingDataConfig, DatasetConfig
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -11,9 +12,9 @@ import matplotlib.colors as mcolors
 # ==========================
 # 1. Dataset Definition
 # ==========================
-class CustomDataset(Dataset):
+class ReasonSegDataset(Dataset):
     def __init__(self, json_path, image_dir, exp_json_path=None, load_images=False, top_samples=30):
-        """Initializes the CustomDataset class.
+        """Initializes the ReasonSegDataset class.
 
         Args:
             json_path (str): Path to the jsonl file containing the data.
@@ -101,6 +102,95 @@ class CustomDataset(Dataset):
             "sam_shapes": sample["sam_shapes"],
         }
 
+class COCODataset(Dataset):
+    def __init__(self, json_path, image_dir, load_images=False):
+        """Initializes the COCODataset class.
+
+        Args:
+            json_path (str): Path to the jsonl file containing the data.
+            image_dir (str): Path to the directory containing the images.
+            load_images (bool, optional): Whether to pre-load the images. Defaults to False.
+        """
+        self.image_dir = image_dir
+        self.load_images = load_images
+        self.data = self.load_data(json_path, image_dir)
+
+    def load_data(self, json_path, image_dir):
+        data = []
+        with open(json_path, "r") as f:
+            for line in f:
+                sample = json.loads(line)
+                image = sample["img"]
+                
+                sam_embs = torch.tensor(sample["sam_embs"]).view(len(sample["sam_embs"]), -1)
+                sam_shapes = sample["sam_shapes"]
+                
+                gt_embs = torch.tensor(sample["gt_embs"]).view(len(sample["gt_embs"]), -1)
+                gt_shapes = sample["gt_shapes"]
+                
+                if (len(gt_embs) == 0):
+                    continue
+                
+                object_name = sample["gt_labels"][0]
+                
+                data.append(
+                    {
+                        "image": (
+                            Image.open(os.path.join(image_dir, image))
+                            if self.load_images
+                            else image
+                        ),
+                        "gt_embs": gt_embs,
+                        "gt_shapes": gt_shapes,
+                        "sam_embs": sam_embs,
+                        "sam_shapes": sam_shapes,
+                        "object_name": object_name,
+                    }
+                )                
+        return data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sample = self.data[idx]
+        image = (
+            sample["image"]
+            if self.load_images
+            else Image.open(os.path.join(self.image_dir, sample["image"]))
+        )
+        
+        object_name = sample["object_name"]
+        possible_queries = [
+            f"Where is the {object_name}?",
+            f"Show me the {object_name}.",
+            f"Point out the {object_name}.",
+            f"Locate the {object_name}.",
+            f"Identify the {object_name}.",
+            f"Find the {object_name}.",
+            f"Indicate the {object_name}.",
+            f"Spot the {object_name}.",
+            f"Pinpoint the {object_name}.",
+        ]
+        query = possible_queries[torch.randint(0, len(possible_queries), (1,)).item()]
+        
+        possible_answers = [
+            f"I can show you the {object_name}.",
+            f"Here is the {object_name}.",
+            "",
+        ]
+        answer = possible_answers[torch.randint(0, len(possible_answers), (1,)).item()]
+        
+        return {
+            "image": image,
+            "queries": query,
+            "answer": answer,
+            "gt_embs": sample["gt_embs"],
+            "gt_shapes": sample["gt_shapes"],
+            "sam_embs": sample["sam_embs"],
+            "sam_shapes": sample["sam_shapes"],
+        }
+
 def collate_fn(batch):
     new_batch = {}
     for key in batch[0]:
@@ -109,38 +199,65 @@ def collate_fn(batch):
 
 
 def get_dataloaders(
-    explanatory_train, image_dir, batch_size, train_jsonl, val_jsonl, test_jsonl
+    ExpData_config: TrainingDataConfig, dataset_config: DatasetConfig
 ):
     """Get the training, validation, and test data loaders.
 
     Args:
-        explanatory_train (_type_): file path to the explanatory data for training
-        image_dir (_type_): path to the directory containing the images
-        batch_size (_type_): batch size for the data loaders
-        train_jsonl (_type_): jsonl file containing the training data masks
-        val_jsonl (_type_): jsonl file containing the validation data masks
-        test_jsonl (_type_): jsonl file containing the test data masks
+        ExpData_config (TrainingDataConfig): Experiment-specific data configuration.
+        dataset_config (DatasetConfig): Dataset configuration
 
     Returns:
         DataLoader: training data loader
         DataLoader: validation data loader
         DataLoader: test data loader
     """
+    
+    ReasonSeg_train_jsonl = ExpData_config.train_jsonl.ReasonSeg
+    explanatory_train = dataset_config.ReasonSeg.json_path
+    ReasonSeg_image_dir = dataset_config.ReasonSeg.image_dir
+    
+    val_jsonl = ExpData_config.val_jsonl
+    assert val_jsonl is not None, "Validation jsonl path is not provided."
+    test_jsonl = ExpData_config.test_jsonl
+    assert test_jsonl is not None, "Test jsonl path is not provided."
+    
+    COCO_train_jsonl = ExpData_config.train_jsonl.COCO
+    COCO_image_dir = os.path.join(dataset_config.COCO.dataset_zoo_dir, dataset_config.COCO.name, "train", "data")
+    
+    assert COCO_train_jsonl is not None or ReasonSeg_train_jsonl is not None, "Training jsonl path is not provided."
+    
+    batch_size = ExpData_config.batch_size
+    
     print("Loading Training Data")
-    data_train = CustomDataset(
-        json_path=train_jsonl,
-        image_dir=os.path.join(image_dir, "train"),
-        exp_json_path=explanatory_train,
-    )
+    data_train = []
+    if ReasonSeg_train_jsonl is not None:
+        data_train.append(
+            ReasonSegDataset(
+                json_path=ReasonSeg_train_jsonl,
+                image_dir=os.path.join(ReasonSeg_image_dir, "train"),
+                exp_json_path=explanatory_train,
+            )
+        )
+    if COCO_train_jsonl is not None:
+        data_train.append(
+            COCODataset(
+                json_path=COCO_train_jsonl,
+                image_dir=COCO_image_dir,
+            )
+        )
+    
+    # Create a single DataLoader for training data
+    data_train = torch.utils.data.ConcatDataset(data_train)
 
     print("Loading Validation Data")
-    data_val = CustomDataset(
-        json_path=val_jsonl, image_dir=os.path.join(image_dir, "val")
+    data_val = ReasonSegDataset(
+        json_path=val_jsonl, image_dir=os.path.join(ReasonSeg_image_dir, "val")
     )
 
     print("Loading Test Data")
-    data_test = CustomDataset(
-        json_path=test_jsonl, image_dir=os.path.join(image_dir, "test")
+    data_test = ReasonSegDataset(
+        json_path=test_jsonl, image_dir=os.path.join(ReasonSeg_image_dir, "test")
     )
 
     # Create DataLoaders

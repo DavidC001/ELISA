@@ -348,7 +348,7 @@ class LISA_Model(nn.Module):
         q8: bool = False,
         dropout: float = 0.1,
         device: str = "cuda",
-        adapter_args: dict = {},
+        adapter_params: dict = {},
     ):
         """Initialize the LISA model
 
@@ -367,6 +367,7 @@ class LISA_Model(nn.Module):
             q8 (bool, optional): Load the model in 8-bit quantization. Defaults to False.
             dropout (float, optional): Dropout rate to apply in the adapter module. Defaults to 0.1.
             device (str, optional): Device to run the model on. Defaults to "cuda"
+            adapter_params (dict, optional): Parameters for the adapter module. Defaults to {}.
 
         """
         super(LISA_Model, self).__init__()
@@ -409,7 +410,7 @@ class LISA_Model(nn.Module):
         model = get_peft_model(model, lora_config)
 
         self.adapter = SegAdapter(
-            seg_emb_size, model.get_input_embeddings().weight.size(1), dropout=dropout, **adapter_args
+            seg_emb_size, model.get_input_embeddings().weight.size(1), dropout=dropout, **adapter_params
         )
 
         self.llava_model = DynamicVocabLlavaModel(model, processor)

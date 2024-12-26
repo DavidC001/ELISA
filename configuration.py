@@ -116,17 +116,32 @@ class ModelParams:
     seg_pos: str = "before"
     text: bool = True
     
+    
+    
+@dataclass
+class TrainSplitDataConfig:
+    COCO: str = None
+    ReasonSeg: str = None
+    
+    def __post_init__(self):
+        self.COCO = os.path.expanduser(self.COCO) if self.COCO else None
+        self.ReasonSeg = os.path.expanduser(self.ReasonSeg) if self.ReasonSeg else None
+    
 @dataclass
 class TrainingDataConfig:
-    train_jsonl: str
+    train_jsonl: TrainSplitDataConfig
     val_jsonl: str
     test_jsonl: str
     batch_size: int = 4
     
     def __post_init__(self):
-        self.train_jsonl = os.path.expanduser(self.train_jsonl)
         self.val_jsonl = os.path.expanduser(self.val_jsonl)
         self.test_jsonl = os.path.expanduser(self.test_jsonl)
+
+@dataclass
+class PreprocessConfig:
+    only_mask: bool = False
+    model: str = "alpha-clip"
 
 @dataclass
 class ExperimentConfig:
@@ -135,6 +150,7 @@ class ExperimentConfig:
     optimizer: OptimizerConfig
     scheduler: schedulerConfig
     model_params: ModelParams
+    preprocess: PreprocessConfig
     log_interval: int
     val_every: int
     dataset: TrainingDataConfig

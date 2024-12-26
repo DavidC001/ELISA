@@ -371,20 +371,20 @@ if __name__ == "__main__":
     base_image_dir = config.dataset.ReasonSeg.image_dir
     splits = ["train", "val", "test"]
 
-    for split in splits:
-        print(f"Split: {split}")
-        config.dataset.ReasonSeg.image_dir = os.path.join(base_image_dir, split)
-        pipeline = PreprocessPipeline(config)
+    # for split in splits:
+    #     print(f"Split: {split}")
+    #     config.dataset.ReasonSeg.image_dir = os.path.join(base_image_dir, split)
+    #     pipeline = PreprocessPipeline(config)
 
-        reasonseg_res = pipeline.run_all(mask_only=False, dataset_name="ReasonSeg")
+    #     reasonseg_res = pipeline.run_all(mask_only=False, dataset_name="ReasonSeg")
 
-        # Save results (e.g., JSONL)
-        out_dir = "data"
-        os.makedirs(out_dir, exist_ok=True)
-        out_file = f"{out_dir}/ReasonSeg_{split}.jsonl"
-        with open(out_file, "w") as f:
-            for r in reasonseg_res:
-                f.write(json.dumps(r, default=default) + "\n")
+    #     # Save results (e.g., JSONL)
+    #     out_dir = "data"
+    #     os.makedirs(out_dir, exist_ok=True)
+    #     out_file = f"{out_dir}/ReasonSeg_{split}.jsonl"
+    #     with open(out_file, "w") as f:
+    #         for r in reasonseg_res:
+    #             f.write(json.dumps(r, default=default) + "\n")
 
     # ------------------------------------------------------------------
     # Example: Process COCO dataset

@@ -50,9 +50,14 @@ train:
       val_every: 50
       dataset:
         batch_size: 4
-        train_jsonl: "..."
+        train_jsonl: 
+          ReasonSeg: "..."
+          COCO: "..."
         val_jsonl: "..."
         test_jsonl: "..."
+      preprocess:
+        only_mask: false
+        model: "alpha-clip"
 
 others:
   wandb_token: "..."
