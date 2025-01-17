@@ -171,6 +171,9 @@ if __name__ == "__main__":
     base_image_dir = config.dataset.image_dir
     dirs = ["train", "val", "test"]
     
+    # create the data directory if it doesn't exist
+    os.makedirs("data", exist_ok=True)
+    
     for d in dirs:
         print(f"Processing {d}")
         
